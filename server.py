@@ -198,21 +198,19 @@ def _log_usage(ticker: str) -> None:
         pass
 
 
-def _to_json_safe(d: dict) -> dict:
-    """Recursively replace NaN/Inf with None for JSON serialisation."""
-    out = {}
-    for k, v in d.items():
-        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-            out[k] = None
-        elif isinstance(v, dict):
-            out[k] = _to_json_safe(v)
-        elif isinstance(v, np.integer):
-            out[k] = int(v)
-        elif isinstance(v, np.floating):
-            out[k] = None if (math.isnan(v) or math.isinf(v)) else float(v)
-        else:
-            out[k] = v
-    return out
+def _to_json_safe(obj):
+    """Recursively replace NaN/Inf with None for JSON serialisation (dicts and lists)."""
+    if isinstance(obj, dict):
+        return {k: _to_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_json_safe(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return None if (math.isnan(obj) or math.isinf(obj)) else float(obj)
+    return obj
 
 
 # ============================================================
@@ -704,12 +702,12 @@ def get_scenarios(ticker: str):
             ],
         }
 
-        return {
+        return _to_json_safe({
             "currentPrice":  round(current, 2),
             "currencySymbol": sym,
             "scenarios":     scenarios,
             "monteCarlo":    mc,
-        }
+        })
     except Exception as exc:
         logger.error("scenarios(%s): %s", ticker, exc)
         raise HTTPException(status_code=502, detail=str(exc))
