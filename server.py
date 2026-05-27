@@ -88,7 +88,12 @@ class _APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if os.getenv("ENV", "development") != "production":
             return await call_next(request)
-        path = request.url.path.removeprefix("/port/5000")
+        raw_path = request.url.path
+        # Requests via /port/5000/ are from the compiled SPA — allow without key.
+        # External clients call /api/ directly and must provide X-API-Key.
+        if raw_path.startswith("/port/5000/"):
+            return await call_next(request)
+        path = raw_path
         if path.startswith("/api/") and path not in _PUBLIC_API_PATHS:
             api_key = os.getenv("API_KEY", "")
             if api_key and request.headers.get("X-API-Key") != api_key:
