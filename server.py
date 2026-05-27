@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -37,6 +38,7 @@ from starlette.requests import Request
 
 import data_fetcher as df_mod
 from data_fetcher import fetch_clinicaltrials, fetch_yfinance_news
+from dual_listing import get_dual_listing_info
 from exchanges import get_exchange_adapter
 from llm_analysis import analyze_news_sentiment, summarize_pipeline
 from model import predict as ml_predict
@@ -129,6 +131,10 @@ BASE_DIR = Path(__file__).parent
 # Persistent watchlist (simple JSON file)
 WATCHLIST_PATH = BASE_DIR / "watchlist.json"
 
+# Append-only usage analytics log (no PII — ticker + region + date only)
+USAGE_LOG_PATH = BASE_DIR / "usage_log.jsonl"
+_usage_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -157,6 +163,18 @@ def _safe(v, fallback=None):
     return v
 
 
+def _log_usage(ticker: str) -> None:
+    """Append one usage record to usage_log.jsonl (thread-safe, best-effort)."""
+    try:
+        region = "HK" if ticker.upper().endswith(".HK") else "US"
+        entry  = json.dumps({"date": datetime.utcnow().strftime("%Y-%m-%d"), "ticker": ticker.upper(), "region": region})
+        with _usage_lock:
+            with open(USAGE_LOG_PATH, "a") as f:
+                f.write(entry + "\n")
+    except Exception:
+        pass
+
+
 def _to_json_safe(d: dict) -> dict:
     """Recursively replace NaN/Inf with None for JSON serialisation."""
     out = {}
@@ -180,6 +198,7 @@ def _to_json_safe(d: dict) -> dict:
 
 @app.get("/api/quote/{ticker}")
 def get_quote(ticker: str):
+    _log_usage(ticker)
     try:
         info = yf.Ticker(ticker).info or {}
         price        = _safe(info.get("regularMarketPrice") or info.get("currentPrice"))
@@ -722,6 +741,22 @@ def remove_from_watchlist(ticker: str):
     wl = [t for t in wl if t.upper() != ticker.upper()]
     _save_watchlist(wl)
     return {"watchlist": wl}
+
+
+# ============================================================
+# /api/dual-listing/{ticker}  — cross-border premium/discount
+# ============================================================
+
+@app.get("/api/dual-listing/{ticker}")
+def get_dual_listing(ticker: str):
+    try:
+        result = get_dual_listing_info(ticker)
+        if result is None:
+            return {"dual_listed": False, "ticker": ticker.upper()}
+        return {"dual_listed": True, **result}
+    except Exception as exc:
+        logger.error("dual_listing(%s): %s", ticker, exc)
+        return {"dual_listed": False, "ticker": ticker.upper()}
 
 
 # ============================================================

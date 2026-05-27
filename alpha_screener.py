@@ -37,14 +37,19 @@ DEFAULT_US_UNIVERSE = [
 ]
 
 DEFAULT_HK_UNIVERSE = [
-    "2269.HK",  # WuXi Biologics
     "6160.HK",  # BeiGene
-    "1801.HK",  # Innovent Biologics
-    "1177.HK",  # Sino Biopharmaceutical
-    "1093.HK",  # CSPC Pharmaceutical
-    "3692.HK",  # Hansoh Pharmaceutical
+    "2269.HK",  # WuXi Biologics
     "2359.HK",  # WuXi AppTec
+    "1801.HK",  # Innovent Biologics
+    "3692.HK",  # Hansoh Pharmaceutical
+    "1093.HK",  # CSPC Pharmaceutical
+    "1177.HK",  # Sino Biopharmaceutical
+    "9688.HK",  # Zai Lab
+    "9995.HK",  # RemeGen
+    "2616.HK",  # CStone Pharmaceuticals
+    "6185.HK",  # CanSino Biologics
     "2196.HK",  # Shanghai Fosun Pharma
+    "0013.HK",  # HUTCHMED (China)
 ]
 
 
