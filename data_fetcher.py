@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import Optional
 
 import pandas as pd
@@ -29,6 +31,28 @@ import yfinance as yf
 from utils import clean_ohlcv, period_to_dates
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-memory TTL cache for yfinance .info calls (60-second TTL)
+# ---------------------------------------------------------------------------
+
+_INFO_CACHE: dict[str, tuple[dict, float]] = {}
+_INFO_CACHE_LOCK = Lock()
+_INFO_CACHE_TTL = 60  # seconds
+
+
+def _cached_yf_info(ticker: str) -> dict:
+    now = time.monotonic()
+    with _INFO_CACHE_LOCK:
+        if ticker in _INFO_CACHE:
+            value, ts = _INFO_CACHE[ticker]
+            if now - ts < _INFO_CACHE_TTL:
+                return value
+    info = yf.Ticker(ticker).info or {}
+    with _INFO_CACHE_LOCK:
+        _INFO_CACHE[ticker] = (info, now)
+    return info
+
 
 # ClinicalTrials.gov REST API v2
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
@@ -88,9 +112,9 @@ def fetch_yfinance_prices(
 
 
 def fetch_yfinance_metadata(ticker: str) -> dict:
-    """Return company metadata from yfinance .info."""
+    """Return company metadata from yfinance .info (cached 60s)."""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = _cached_yf_info(ticker)
     except Exception as exc:
         logger.error("fetch_yfinance_metadata(%s): %s", ticker, exc)
         info = {}
@@ -112,9 +136,9 @@ def fetch_yfinance_metadata(ticker: str) -> dict:
 
 
 def fetch_yfinance_fundamentals(ticker: str) -> dict:
-    """Return a flat dict of financial ratios / key metrics from yfinance .info."""
+    """Return a flat dict of financial ratios / key metrics from yfinance .info (cached 60s)."""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = _cached_yf_info(ticker)
     except Exception as exc:
         logger.error("fetch_yfinance_fundamentals(%s): %s", ticker, exc)
         info = {}

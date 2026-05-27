@@ -16,6 +16,8 @@ import logging
 import math
 import os
 import threading
+import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -105,6 +107,21 @@ class _APIKeyMiddleware(BaseHTTPMiddleware):
 
 # Perplexity hardcodes /port/5000 as the API prefix in the compiled JS.
 # Strip it before routing so all /api/* handlers work unchanged.
+class _RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = uuid.uuid4().hex[:8]
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        logger.info(
+            "rid=%s method=%s path=%s status=%d duration_ms=%d",
+            request_id, request.method, request.url.path,
+            response.status_code, duration_ms,
+        )
+        response.headers["X-Request-Id"] = request_id
+        return response
+
+
 class _StripPerplexityPrefix(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path.startswith("/port/5000"):
@@ -115,6 +132,7 @@ class _StripPerplexityPrefix(BaseHTTPMiddleware):
 _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
 
 app.add_middleware(_StripPerplexityPrefix)       # innermost
+app.add_middleware(_RequestLoggingMiddleware)
 app.add_middleware(_ValidateTickerMiddleware)
 app.add_middleware(_APIKeyMiddleware)
 app.add_middleware(SlowAPIMiddleware)
