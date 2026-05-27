@@ -73,9 +73,11 @@ class USExchangeAdapter(BaseExchangeAdapter):
         """
         from data_fetcher import fetch_yfinance_news
         df = fetch_yfinance_news(ticker, limit)
-        # Rename to match the filings schema so callers use one column set
-        df = df.rename(columns={"summary": "type"}) if "summary" in df.columns else df
-        return df
+        if df.empty:
+            return df
+        out = df[["date", "title", "url"]].copy()
+        out["type"] = "News"
+        return out
 
     # ------------------------------------------------------------------
     # Clinical trials (biotech-specific)

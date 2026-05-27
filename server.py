@@ -369,7 +369,7 @@ def get_trials(ticker: str):
                 "sponsor":  row.get("sponsor"),
                 "probApproval": _safe(float(row.get("prob_approval", 0))),
             })
-        return {"trials": trials}
+        return _to_json_safe({"trials": trials})
     except Exception as exc:
         logger.error("trials(%s): %s", ticker, exc)
         return {"trials": []}
@@ -491,7 +491,7 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
         {"name": "News Sentiment",   "score": news_sentiment,   "weight": _FACTOR_WEIGHTS["News Sentiment"]},
     ]
 
-    return {
+    return _to_json_safe({
         "score":      score,
         "signal":     signal,
         "factors":    factors,
@@ -504,7 +504,7 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
             "ai_generated":   llm_result.get("ai_generated", False),
         },
         "lastUpdated": datetime.utcnow().isoformat() + "Z",
-    }
+    })
 
 
 def _default_confidence() -> dict:

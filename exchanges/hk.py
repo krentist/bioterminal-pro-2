@@ -32,7 +32,7 @@ _HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 _HKEX_SEARCH_URL = (
-    "https://www.hkexnews.hk/listedco/listconews/advancedsearch/search_active_main_en.aspx"
+    "https://www.hkexnews.hk/listedco/listconews/advancedsearch/search_active_main.aspx"
 )
 _CCASS_URL = "https://www.hkexnews.hk/sdw/search/searchsdw.aspx"
 

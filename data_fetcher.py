@@ -232,7 +232,7 @@ def fetch_clinicaltrials(ticker: str) -> pd.DataFrame:
         company_name = meta.get("name") or ticker
         # Strip common suffixes that confuse the search
         clean_name = re.sub(
-            r"\s+(Inc\.?|Corp\.?|Ltd\.?|LLC\.?|PLC\.?|S\.A\.?|Holdings?|Therapeutics?|Biosciences?|Pharmaceuticals?|Biopharma)$",
+            r"\s+(Inc\.?|Corp\.?|Ltd\.?|LLC\.?|PLC\.?|S\.A\.?|A\.G\.?|AG|Holdings?|Therapeutics?|Biosciences?|Pharmaceuticals?|Biopharma)$",
             "",
             company_name,
             flags=re.IGNORECASE,
