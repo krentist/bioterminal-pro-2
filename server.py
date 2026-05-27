@@ -726,6 +726,55 @@ def remove_from_watchlist(ticker: str):
 
 
 # ============================================================
+# /api/filings/{ticker}  — HKEXnews announcements (HK) / news proxy (US)
+# ============================================================
+
+@app.get("/api/filings/{ticker}")
+def get_filings(ticker: str):
+    try:
+        df = df_mod.get_filings(ticker, limit=50)
+        if df.empty:
+            return []
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                "date":  str(row.get("date") or ""),
+                "title": str(row.get("title") or ""),
+                "type":  str(row.get("type") or ""),
+                "url":   str(row.get("url") or ""),
+            })
+        return records
+    except Exception as exc:
+        logger.error("filings(%s): %s", ticker, exc)
+        return []
+
+
+# ============================================================
+# /api/flow/{ticker}  — CCASS shareholding snapshots (HK)
+# ============================================================
+
+@app.get("/api/flow/{ticker}")
+def get_flow(ticker: str):
+    try:
+        df = df_mod.get_institutional_flow(ticker)
+        if df.empty:
+            return []
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                "participant_id":   str(row.get("participant_id") or ""),
+                "participant_name": str(row.get("participant_name") or ""),
+                "shares":           int(row["shares"]) if pd.notna(row.get("shares")) else None,
+                "percentage":       float(row["percentage"]) if pd.notna(row.get("percentage")) else None,
+                "snapshot_date":    str(row.get("snapshot_date") or ""),
+            })
+        return records
+    except Exception as exc:
+        logger.error("flow(%s): %s", ticker, exc)
+        return []
+
+
+# ============================================================
 # Static files  — React SPA  (MUST be last)
 # ============================================================
 
