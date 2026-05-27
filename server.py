@@ -38,6 +38,7 @@ from starlette.requests import Request
 import data_fetcher as df_mod
 from data_fetcher import fetch_clinicaltrials, fetch_yfinance_news
 from exchanges import get_exchange_adapter
+from llm_analysis import analyze_news_sentiment, summarize_pipeline
 from model import predict as ml_predict
 from pipeline_analyzer import enrich_trials
 from utils import period_to_dates
@@ -422,28 +423,23 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
     except Exception:
         pass
 
-    # News sentiment + newsImpact block
-    news_sentiment = 50
-    key_event      = None
-    recent_count   = 0
+    # News sentiment via LLM (falls back to NEUTRAL if key absent)
+    news_sentiment  = 50
+    key_event       = None
+    recent_count    = 0
     sentiment_score = 0.0
+    llm_result: dict = {}
     try:
         news_df = fetch_yfinance_news(ticker, limit=15)
         if not news_df.empty:
             recent_count = len(news_df)
-            pos_kw = {"fda", "approval", "approved", "positive", "beat", "surge",
-                      "breakthrough", "accelerat", "strong", "upgraded", "buy", "outperform"}
-            neg_kw = {"reject", "failed", "failure", "disapprov", "miss", "decline",
-                      "concern", "warning", "downgrad", "sell", "lawsuit", "recall"}
-            pos_hits = neg_hits = 0
-            for title in news_df["title"].fillna("").str.lower():
-                pos_hits += sum(1 for w in pos_kw if w in title)
-                neg_hits += sum(1 for w in neg_kw if w in title)
-            total = pos_hits + neg_hits or 1
-            sentiment_score = round((pos_hits - neg_hits) / total, 2)
-            news_sentiment  = _clamp(50 + (pos_hits - neg_hits) * 8)
-            # Most recent headline as keyEvent
-            key_event = str(news_df["title"].iloc[0]) if news_df["title"].iloc[0] else None
+            headlines    = news_df["title"].dropna().tolist()
+            llm_result   = analyze_news_sentiment(headlines, ticker)
+            sentiment_score = round(llm_result.get("score", 0.0), 2)
+            # Map LLM score (-1→+1) to factor score (0→100)
+            news_sentiment = _clamp(50 + sentiment_score * 50)
+            events = llm_result.get("key_events", [])
+            key_event = events[0] if events else (headlines[0] if headlines else None)
     except Exception:
         pass
 
@@ -456,13 +452,16 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
     ]
 
     return {
-        "score":       score,
-        "signal":      signal,
-        "factors":     factors,
-        "newsImpact":  {
+        "score":      score,
+        "signal":     signal,
+        "factors":    factors,
+        "newsImpact": {
             "keyEvent":       key_event,
             "recentCount":    recent_count,
             "sentimentScore": sentiment_score,
+            "interpretation": llm_result.get("interpretation"),
+            "keyEvents":      llm_result.get("key_events", []),
+            "ai_generated":   llm_result.get("ai_generated", False),
         },
         "lastUpdated": datetime.utcnow().isoformat() + "Z",
     }
@@ -723,6 +722,32 @@ def remove_from_watchlist(ticker: str):
     wl = [t for t in wl if t.upper() != ticker.upper()]
     _save_watchlist(wl)
     return {"watchlist": wl}
+
+
+# ============================================================
+# /api/pipeline-summary/{ticker}  — LLM pipeline risk summarisation
+# ============================================================
+
+@app.get("/api/pipeline-summary/{ticker}")
+def get_pipeline_summary(ticker: str):
+    try:
+        raw     = fetch_clinicaltrials(ticker)
+        enriched = enrich_trials(raw) if not raw.empty else raw
+        try:
+            info         = yf.Ticker(ticker).info or {}
+            company_name = info.get("longName") or info.get("shortName") or ticker
+        except Exception:
+            company_name = ticker
+        result = summarize_pipeline(enriched, company_name)
+        return result
+    except Exception as exc:
+        logger.error("pipeline_summary(%s): %s", ticker, exc)
+        return {
+            "summary": "Pipeline summary unavailable.",
+            "key_risks": [],
+            "upcoming_catalysts": [],
+            "ai_generated": False,
+        }
 
 
 # ============================================================
