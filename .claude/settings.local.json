@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -o 'hsl\\([^\\)]*\\)\\\\|#[0-9a-fA-F]\\\\{3,8\\\\}\\\\|oklch\\([^\\)]*\\)' \"/Users/kyle/Downloads/Perplexity BioTerminal Pro/assets/index-93jzVUEy.css\")",
+      "Bash(grep -oE '`/api/[^`]+`' \"/Users/kyle/Downloads/Perplexity BioTerminal Pro/assets/index-CQpGJL61.js\")"
+    ]
+  }
+}
