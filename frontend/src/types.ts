@@ -56,15 +56,22 @@ export interface NewsItem {
 
 export interface ConfidenceFactor {
   name: string;
-  value: number;
-  direction: string;
+  score: number;
+  weight: number;
 }
 
 export interface ConfidenceData {
   score: number;
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   factors: ConfidenceFactor[];
-  newsImpact: string;
+  newsImpact: {
+    keyEvent: string | null;
+    recentCount: number;
+    sentimentScore: number;
+    interpretation?: string | null;
+    keyEvents?: string[];
+    ai_generated?: boolean;
+  } | null;
 }
 
 export interface DCFData {
@@ -75,9 +82,9 @@ export interface DCFData {
 }
 
 export interface Scenario {
-  name: string;
-  price: number;
-  upside: number;
+  label: string;
+  targetPrice: number;
+  returnPct: number;
   probability?: number | null;
 }
 
@@ -86,11 +93,11 @@ export interface ScenariosData {
   currencySymbol: string;
   scenarios: Scenario[];
   monteCarlo?: {
-    mean: number;
-    p10: number;
-    p25: number;
-    p75: number;
-    p90: number;
+    percentile5:  number;
+    percentile25: number;
+    median:       number;
+    percentile75: number;
+    percentile95: number;
   } | null;
 }
 

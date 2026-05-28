@@ -10,28 +10,33 @@ function SignalBadge({ signal }: { signal: string }) {
     NEUTRAL: 'bg-elevated text-dim border-line',
   };
   return (
-    <span className={`px-2.5 py-0.5 rounded border text-[11px] font-semibold tracking-wide ${styles[signal] ?? styles.NEUTRAL}`}>
+    <span className={`px-2 py-0.5 rounded border text-[10px] font-semibold tracking-widest ${styles[signal] ?? styles.NEUTRAL}`}>
       {signal}
     </span>
   );
 }
 
 function FactorRow({ factor }: { factor: ConfidenceFactor }) {
-  const pct     = Math.min(100, Math.max(0, Math.abs(factor.value) * 100));
-  const positive = factor.direction === 'up' || factor.direction === 'positive' || factor.value > 0;
+  const bull = factor.score >= 50;
+  const pct  = Math.min(100, Math.max(0, factor.score));
   return (
-    <div className="flex items-center gap-3 py-1.5">
-      <span className="text-[11px] text-dim w-40 flex-none truncate">{factor.name}</span>
-      <div className="flex-1 bg-elevated rounded-full h-1 overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${positive ? 'bg-up' : 'bg-down'}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className={`text-[10px] font-mono w-4 flex-none ${positive ? 'text-up' : 'text-down'}`}>
-        {positive ? '▲' : '▼'}
-      </span>
-    </div>
+    <tr className="border-b border-line/50 last:border-0">
+      <td className="py-2 pr-4 text-[11px] text-dim whitespace-nowrap">{factor.name}</td>
+      <td className="py-2 pr-4 w-36">
+        <div className="bg-elevated rounded-full h-1 overflow-hidden">
+          <div
+            className={`h-full rounded-full ${bull ? 'bg-up' : 'bg-down'}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </td>
+      <td className={`py-2 pr-4 text-[11px] font-mono text-right ${bull ? 'text-up' : 'text-down'}`}>
+        {factor.score}
+      </td>
+      <td className="py-2 text-[10px] font-mono text-dim text-right">
+        {Math.round(factor.weight * 100)}%
+      </td>
+    </tr>
   );
 }
 
@@ -50,60 +55,83 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
 
   if (loading) return (
     <div className="space-y-3 max-w-sm">
-      <Skeleton className="h-28" />
-      <Skeleton className="h-44" />
+      <Skeleton className="h-24" />
+      <Skeleton className="h-40" />
     </div>
   );
   if (error || !data) return <p className="text-sm text-dim">{error ?? 'No data'}</p>;
 
-  const scoreColor =
-    data.score >= 60 ? 'text-up' :
-    data.score <= 40 ? 'text-down' : 'text-dim';
+  const scoreColor = data.score >= 60 ? 'text-up' : data.score <= 40 ? 'text-down' : 'text-dim';
+  const barColor   = data.score >= 60 ? 'bg-up'   : data.score <= 40 ? 'bg-down'   : 'bg-hi';
 
-  const barColor =
-    data.score >= 60 ? 'bg-up' :
-    data.score <= 40 ? 'bg-down' : 'bg-hi';
+  const ni = data.newsImpact;
+  const newsText = ni?.interpretation ?? ni?.keyEvent ?? null;
 
   return (
-    <div className="space-y-4 max-w-sm">
-      {/* Score card */}
-      <div className="p-4 bg-surface rounded-lg border border-line">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <p className="text-[10px] text-dim uppercase tracking-wider mb-1">Confidence Score</p>
-            <p className={`text-4xl font-mono font-light leading-none ${scoreColor}`}>{data.score}</p>
-            <p className="text-[10px] text-dim mt-1">out of 100</p>
+    <div className="space-y-4 max-w-lg">
+      {/* Score header */}
+      <div className="border border-line rounded bg-surface">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-line">
+          <div className="flex items-end gap-3">
+            <span className={`text-4xl font-mono font-light leading-none ${scoreColor}`}>{data.score}</span>
+            <span className="text-[10px] text-dim mb-0.5">/ 100</span>
           </div>
           <SignalBadge signal={data.signal} />
         </div>
-
-        {/* Score bar */}
-        <div className="bg-elevated rounded-full h-1.5 overflow-hidden mb-1">
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${barColor}`}
-            style={{ width: `${data.score}%` }}
-          />
-        </div>
-        <div className="flex justify-between text-[10px] text-dim">
-          <span>Bear 0</span>
-          <span>Neutral 50</span>
-          <span>Bull 100</span>
+        <div className="px-4 py-2">
+          <div className="bg-elevated rounded-full h-1 overflow-hidden">
+            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${data.score}%` }} />
+          </div>
+          <div className="flex justify-between text-[9px] text-dim mt-1">
+            <span>BEAR</span><span>NEUTRAL</span><span>BULL</span>
+          </div>
         </div>
       </div>
 
-      {/* Factors */}
+      {/* Factors table */}
       {data.factors?.length > 0 && (
-        <div className="p-4 bg-surface rounded-lg border border-line">
-          <p className="text-[10px] text-dim uppercase tracking-wider mb-3">Signal Factors</p>
-          {data.factors.map((f, i) => <FactorRow key={i} factor={f} />)}
+        <div className="border border-line rounded bg-surface">
+          <div className="px-3 py-2 border-b border-line">
+            <p className="text-[10px] text-dim uppercase tracking-wider">Signal Factors</p>
+          </div>
+          <div className="px-3 py-1">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="py-1.5 text-left text-[9px] text-dim uppercase tracking-wider font-medium">Factor</th>
+                  <th className="py-1.5 text-[9px] text-dim uppercase tracking-wider font-medium"></th>
+                  <th className="py-1.5 text-right text-[9px] text-dim uppercase tracking-wider font-medium">Score</th>
+                  <th className="py-1.5 text-right text-[9px] text-dim uppercase tracking-wider font-medium">Wt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.factors.map((f, i) => <FactorRow key={i} factor={f} />)}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* News impact */}
-      {data.newsImpact && (
-        <div className="p-3 bg-surface rounded-lg border border-line">
-          <p className="text-[10px] text-dim uppercase tracking-wider mb-1">News Impact</p>
-          <p className="text-[12px] text-ink">{data.newsImpact}</p>
+      {ni && (
+        <div className="border border-line rounded bg-surface px-3 py-2.5 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-dim uppercase tracking-wider">News Sentiment</p>
+            {ni.ai_generated && (
+              <span className="text-[9px] text-dim bg-elevated border border-line px-1.5 py-0.5 rounded">AI</span>
+            )}
+          </div>
+          <div className="flex items-center gap-4 text-[11px]">
+            <span className="text-dim">{ni.recentCount} recent articles</span>
+            {ni.sentimentScore !== 0 && (
+              <span className={`font-mono ${ni.sentimentScore > 0 ? 'text-up' : 'text-down'}`}>
+                {ni.sentimentScore > 0 ? '+' : ''}{ni.sentimentScore.toFixed(2)} sentiment
+              </span>
+            )}
+          </div>
+          {newsText && (
+            <p className="text-[11px] text-ink leading-snug">{newsText}</p>
+          )}
         </div>
       )}
     </div>

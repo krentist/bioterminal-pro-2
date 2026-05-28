@@ -4,14 +4,12 @@ import { SkeletonGrid } from '@/components/Skeleton';
 import { fmtBig, fmtMultiple, fmtPctFrac, fmt } from '@/lib/utils';
 import type { Fundamentals } from '@/types';
 
-function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="p-3 bg-surface rounded-lg border border-line">
-      <div className="text-[10px] text-dim uppercase tracking-wider mb-1.5 leading-none">{label}</div>
-      <div className={`text-[13px] font-mono font-medium leading-none ${accent ? 'text-hi' : 'text-ink'}`}>
-        {value}
-      </div>
-    </div>
+    <tr className="border-b border-line/50 last:border-0">
+      <td className="py-1.5 pr-6 text-[10px] text-dim whitespace-nowrap">{label}</td>
+      <td className="py-1.5 text-[11px] font-mono text-ink text-right whitespace-nowrap">{value}</td>
+    </tr>
   );
 }
 
@@ -34,44 +32,57 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
 
   const s = data.currencySymbol || '$';
 
+  const leftCol = [
+    ['Market Cap',     fmtBig(data.marketCap, s)],
+    ['Revenue TTM',    fmtBig(data.revenue, s)],
+    ['Rev Growth',     fmtPctFrac(data.revenueGrowth)],
+    ['Gross Margin',   fmtPctFrac(data.grossMargin)],
+    ['Op. Margin',     fmtPctFrac(data.operatingMargin)],
+    ['Profit Margin',  fmtPctFrac(data.profitMargin)],
+  ] as [string, string][];
+
+  const rightCol = [
+    ['Forward P/E',    fmtMultiple(data.forwardPE)],
+    ['EV / Revenue',   fmtMultiple(data.evToRevenue)],
+    ['EV / EBITDA',    fmtMultiple(data.evToEbitda)],
+    ['ROE',            fmtPctFrac(data.roe)],
+    ['Beta',           data.beta != null ? data.beta.toFixed(2) : '—'],
+    ['Analyst Target', data.targetPrice != null ? fmt(data.targetPrice, s) : '—'],
+  ] as [string, string][];
+
   return (
-    <div className="space-y-4">
-      {/* Header row */}
+    <div className="space-y-4 max-w-3xl">
+      {/* Company header */}
       {(data.name || data.sector) && (
-        <div className="flex items-start justify-between gap-4 pb-1">
-          <div>
-            {data.name   && <p className="text-sm font-medium text-ink">{data.name}</p>}
-            {data.sector && <p className="text-xs text-dim mt-0.5">{data.sector}</p>}
-          </div>
-          {data.targetPrice != null && (
-            <div className="text-right flex-none">
-              <p className="text-[10px] text-dim uppercase tracking-wider">Analyst Target</p>
-              <p className="text-sm font-mono text-ink mt-0.5">{fmt(data.targetPrice, s)}</p>
-            </div>
-          )}
+        <div className="border-b border-line pb-3">
+          {data.name   && <p className="text-[13px] font-medium text-ink">{data.name}</p>}
+          {data.sector && <p className="text-[11px] text-dim mt-0.5">{data.sector}</p>}
         </div>
       )}
 
-      {/* Metrics grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Metric label="Market Cap"     value={fmtBig(data.marketCap, s)} />
-        <Metric label="Forward P/E"    value={fmtMultiple(data.forwardPE)} />
-        <Metric label="EV / Revenue"   value={fmtMultiple(data.evToRevenue)} />
-        <Metric label="EV / EBITDA"    value={fmtMultiple(data.evToEbitda)} />
-        <Metric label="Beta"           value={data.beta != null ? data.beta.toFixed(2) : '—'} />
-        <Metric label="Revenue (TTM)"  value={fmtBig(data.revenue, s)} />
-        <Metric label="Revenue Growth" value={fmtPctFrac(data.revenueGrowth)} />
-        <Metric label="Gross Margin"   value={fmtPctFrac(data.grossMargin)} />
-        <Metric label="Op. Margin"     value={fmtPctFrac(data.operatingMargin)} />
-        <Metric label="Profit Margin"  value={fmtPctFrac(data.profitMargin)} />
-        <Metric label="ROE"            value={fmtPctFrac(data.roe)} />
+      {/* Two-column metrics table */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-0">
+        <table className="w-full">
+          <tbody>
+            {leftCol.map(([label, value]) => (
+              <Row key={label} label={label} value={value} />
+            ))}
+          </tbody>
+        </table>
+        <table className="w-full">
+          <tbody>
+            {rightCol.map(([label, value]) => (
+              <Row key={label} label={label} value={value} />
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* Description */}
       {data.description && (
-        <div className="p-3 bg-surface rounded-lg border border-line">
-          <p className="text-[10px] text-dim uppercase tracking-wider mb-2">About</p>
-          <p className="text-[12px] text-dim leading-relaxed line-clamp-4">{data.description}</p>
+        <div className="pt-1">
+          <p className="text-[10px] text-dim uppercase tracking-wider mb-1.5">Business Description</p>
+          <p className="text-[11px] text-dim leading-relaxed line-clamp-4">{data.description}</p>
         </div>
       )}
     </div>

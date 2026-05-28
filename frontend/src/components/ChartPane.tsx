@@ -95,6 +95,16 @@ export function ChartPane({ bars, range, ranges, onRangeChange, dark, loading }:
     candleRef.current = candle;
     volRef.current    = vol;
 
+    // Remove the built-in TradingView attribution link
+    const attrLink = el.querySelector('a[href*="tradingview"]') as HTMLElement | null;
+    if (attrLink) attrLink.style.display = 'none';
+    // Also catch it if injected asynchronously
+    const attrObserver = new MutationObserver(() => {
+      const link = el.querySelector('a[href*="tradingview"]') as HTMLElement | null;
+      if (link) { link.style.display = 'none'; attrObserver.disconnect(); }
+    });
+    attrObserver.observe(el, { childList: true, subtree: true });
+
     const ro = new ResizeObserver(() => {
       if (el) chart.resize(el.clientWidth, el.clientHeight);
     });
@@ -102,6 +112,7 @@ export function ChartPane({ bars, range, ranges, onRangeChange, dark, loading }:
 
     return () => {
       ro.disconnect();
+      attrObserver.disconnect();
       chart.remove();
       chartRef.current = candleRef.current = volRef.current = null;
     };

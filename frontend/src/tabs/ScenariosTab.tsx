@@ -4,31 +4,29 @@ import { Skeleton } from '@/components/Skeleton';
 import { fmt } from '@/lib/utils';
 import type { ScenariosData, Scenario } from '@/types';
 
-const SCENARIO_COLORS: Record<string, string> = {
-  bear:    'border-down/30 bg-down/5',
-  base:    'border-line bg-surface',
-  bull:    'border-up/30 bg-up/5',
-  bearish: 'border-down/30 bg-down/5',
-  bullish: 'border-up/30 bg-up/5',
+const LABEL_STYLE: Record<string, string> = {
+  bear:    'border-down/40 bg-down/5 text-down',
+  base:    'border-line bg-surface text-dim',
+  bull:    'border-up/40 bg-up/5 text-up',
 };
 
-function scenarioStyle(name: string): string {
-  return SCENARIO_COLORS[name.toLowerCase()] ?? 'border-line bg-surface';
+function labelStyle(label: string): string {
+  return LABEL_STYLE[label.toLowerCase()] ?? 'border-line bg-surface text-dim';
 }
 
 function ScenarioCard({ s, sym }: { s: Scenario; sym: string }) {
-  const positive = (s.upside ?? 0) >= 0;
+  const pos = s.returnPct >= 0;
   return (
-    <div className={`p-4 rounded-lg border ${scenarioStyle(s.name)}`}>
-      <p className="text-[10px] text-dim uppercase tracking-wider mb-2">{s.name}</p>
-      <p className="text-2xl font-mono font-light text-ink leading-none mb-1">
-        {fmt(s.price, sym)}
+    <div className={`p-3 rounded border ${labelStyle(s.label)}`}>
+      <p className="text-[10px] font-medium uppercase tracking-wider mb-2 opacity-70">{s.label}</p>
+      <p className="text-xl font-mono font-medium text-ink leading-none mb-1">
+        {fmt(s.targetPrice, sym)}
       </p>
-      <p className={`text-sm font-mono font-medium ${positive ? 'text-up' : 'text-down'}`}>
-        {positive ? '+' : ''}{(s.upside ?? 0).toFixed(1)}%
+      <p className={`text-[12px] font-mono font-semibold ${pos ? 'text-up' : 'text-down'}`}>
+        {pos ? '+' : ''}{s.returnPct.toFixed(1)}%
       </p>
       {s.probability != null && (
-        <p className="text-[10px] text-dim mt-2">{(s.probability * 100).toFixed(0)}% probability</p>
+        <p className="text-[10px] text-dim mt-1.5">{(s.probability * 100).toFixed(0)}% prob</p>
       )}
     </div>
   );
@@ -49,66 +47,50 @@ export function ScenariosTab({ ticker }: { ticker: string }) {
 
   if (loading) return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3"><Skeleton className="h-28" /><Skeleton className="h-28" /><Skeleton className="h-28" /></div>
-      <Skeleton className="h-24" />
+      <div className="grid grid-cols-3 gap-3">
+        <Skeleton className="h-24" /><Skeleton className="h-24" /><Skeleton className="h-24" />
+      </div>
+      <Skeleton className="h-20" />
     </div>
   );
-  if (error || !data) return <p className="text-sm text-dim">{error ?? 'No scenario data available'}</p>;
+  if (error || !data) return <p className="text-sm text-dim">{error ?? 'No scenario data'}</p>;
 
   const sym = data.currencySymbol || '$';
+  const mc  = data.monteCarlo;
 
   return (
-    <div className="space-y-4">
-      <p className="text-[11px] text-dim">
-        Current: <span className="font-mono text-ink">{fmt(data.currentPrice, sym)}</span>
-      </p>
+    <div className="space-y-4 max-w-2xl">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-dim uppercase tracking-wider">Current</span>
+        <span className="font-mono text-[12px] text-ink">{fmt(data.currentPrice, sym)}</span>
+      </div>
 
-      {/* Scenario cards */}
       {data.scenarios?.length > 0 && (
-        <div className={`grid gap-3 ${data.scenarios.length === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'}`}>
+        <div className="grid grid-cols-3 gap-3">
           {data.scenarios.map((s, i) => (
             <ScenarioCard key={i} s={s} sym={sym} />
           ))}
         </div>
       )}
 
-      {/* Monte Carlo */}
-      {data.monteCarlo && (
-        <div className="p-4 bg-surface rounded-lg border border-line">
-          <p className="text-[10px] text-dim uppercase tracking-wider mb-4">Monte Carlo Percentiles</p>
-          <div className="relative">
-            {/* Bar track */}
-            <div className="flex items-end gap-1 h-10 mb-2">
-              {([
-                { label: 'P10', v: data.monteCarlo.p10,  h: '25%'  },
-                { label: 'P25', v: data.monteCarlo.p25,  h: '55%'  },
-                { label: 'Mean',v: data.monteCarlo.mean, h: '100%' },
-                { label: 'P75', v: data.monteCarlo.p75,  h: '60%'  },
-                { label: 'P90', v: data.monteCarlo.p90,  h: '30%'  },
-              ] as const).map(col => (
-                <div key={col.label} className="flex-1 flex flex-col items-center justify-end gap-0.5">
-                  <div
-                    className="w-full rounded-sm bg-hi/40"
-                    style={{ height: col.h }}
-                  />
-                </div>
-              ))}
-            </div>
-            {/* Values */}
-            <div className="grid grid-cols-5 gap-1 text-center">
-              {[
-                { label: 'P10',  v: data.monteCarlo.p10  },
-                { label: 'P25',  v: data.monteCarlo.p25  },
-                { label: 'Mean', v: data.monteCarlo.mean },
-                { label: 'P75',  v: data.monteCarlo.p75  },
-                { label: 'P90',  v: data.monteCarlo.p90  },
-              ].map(col => (
-                <div key={col.label}>
-                  <p className="text-[9px] text-dim mb-0.5">{col.label}</p>
-                  <p className="text-[10px] font-mono text-ink">{fmt(col.v, sym)}</p>
-                </div>
-              ))}
-            </div>
+      {mc && (
+        <div className="border border-line rounded bg-surface">
+          <div className="px-3 py-2 border-b border-line">
+            <p className="text-[10px] text-dim uppercase tracking-wider">Monte Carlo — 1Y Simulation</p>
+          </div>
+          <div className="grid grid-cols-5 divide-x divide-line">
+            {([
+              { label: 'P5',     v: mc.percentile5  },
+              { label: 'P25',    v: mc.percentile25 },
+              { label: 'Median', v: mc.median       },
+              { label: 'P75',    v: mc.percentile75 },
+              { label: 'P95',    v: mc.percentile95 },
+            ] as const).map(col => (
+              <div key={col.label} className="px-3 py-2.5 text-center">
+                <p className="text-[9px] text-dim mb-1">{col.label}</p>
+                <p className="text-[11px] font-mono text-ink">{fmt(col.v, sym)}</p>
+              </div>
+            ))}
           </div>
         </div>
       )}

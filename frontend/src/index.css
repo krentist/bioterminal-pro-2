@@ -70,3 +70,6 @@ html, body {
 
 /* ── Table row hover ── */
 .row-hover:hover { background: var(--surface); }
+
+/* ── Suppress lightweight-charts TradingView attribution ── */
+a[href*="tradingview.com"] { display: none !important; }
