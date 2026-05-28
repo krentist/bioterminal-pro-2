@@ -40,12 +40,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 import data_fetcher as df_mod
-from data_fetcher import fetch_clinicaltrials, fetch_yfinance_news
+from data_fetcher import fetch_clinicaltrials, fetch_clinicaltrials_by_nct_ids, fetch_yfinance_news
+import alpha_screener as _screener
+import backtester as _backtester
+import devils_advocate as _devil
+import earnings_analyzer as _earnings
 from dual_listing import get_dual_listing_info
 from exchanges import get_exchange_adapter
-from llm_analysis import analyze_news_sentiment, summarize_pipeline
+from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline
 from model import predict as ml_predict
 from pipeline_analyzer import enrich_trials
+from rnpv_calculator import pipeline_rnpv
 from utils import period_to_dates
 
 logger = logging.getLogger(__name__)
@@ -228,14 +233,13 @@ def _to_json_safe(obj):
 def get_quote(ticker: str):
     _log_usage(ticker)
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = df_mod._cached_yf_info(ticker)
         price        = _safe(info.get("regularMarketPrice") or info.get("currentPrice"))
         prev_close   = _safe(info.get("regularMarketPreviousClose") or info.get("previousClose"))
         change_pct   = ((price / prev_close) - 1) if price and prev_close else None
         currency     = info.get("currency", "USD")
-        # Fallback to last close if live price missing
         if not price:
-            hist = yf.Ticker(ticker).history(period="2d", auto_adjust=True)
+            hist = df_mod.get_price_history(ticker, period="5d")
             if not hist.empty:
                 price      = float(hist["Close"].iloc[-1])
                 prev_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
@@ -277,7 +281,7 @@ def get_stock(ticker: str, range: str = "1y"):
     }
     interval = _INTERVAL_MAP.get(range, "1d")
     try:
-        hist = yf.Ticker(ticker).history(period=yf_period, interval=interval, auto_adjust=True)
+        hist = df_mod.get_price_history(ticker, period=yf_period, interval=interval)
         if hist.empty:
             return {"bars": []}
         bars = []
@@ -303,7 +307,7 @@ def get_stock(ticker: str, range: str = "1y"):
 @app.get("/api/fundamentals/{ticker}")
 def get_fundamentals(ticker: str):
     try:
-        info     = yf.Ticker(ticker).info or {}
+        info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
         return _to_json_safe({
             "marketCap":       info.get("marketCap"),
@@ -430,11 +434,17 @@ _FACTOR_WEIGHTS = {
 }
 
 
-def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, score: int, signal: str) -> dict:
-    """Build the full confidence response the React lU component requires."""
+def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, ml_result) -> dict:
+    """
+    Build the full confidence response the React UI component requires.
+
+    Score = weighted sum of 5 factors (0-100). Signal derived from that score.
+    ML result is included as context under mlSignal — it does not drive the score,
+    which prevents the factor breakdown from being inconsistent with the headline number.
+    """
     info = {}
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = df_mod._cached_yf_info(ticker)
     except Exception:
         pass
 
@@ -460,7 +470,7 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
     technical = 50
     try:
         if not prices.empty and len(prices) >= 20:
-            col = "close" if "close" in prices.columns else prices.columns[3]
+            col = "Close" if "Close" in prices.columns else prices.columns[3]
             closes = prices[col].dropna().values
             if len(closes) >= 15:
                 delta  = np.diff(closes[-15:])
@@ -486,7 +496,6 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
             headlines    = news_df["title"].dropna().tolist()
             llm_result   = analyze_news_sentiment(headlines, ticker)
             sentiment_score = round(llm_result.get("score", 0.0), 2)
-            # Map LLM score (-1→+1) to factor score (0→100)
             news_sentiment = _clamp(50 + sentiment_score * 50)
             events = llm_result.get("key_events", [])
             key_event = events[0] if events else (headlines[0] if headlines else None)
@@ -501,10 +510,21 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
         {"name": "News Sentiment",   "score": news_sentiment,   "weight": _FACTOR_WEIGHTS["News Sentiment"]},
     ]
 
+    # Score = weighted sum of factors; signal derived from thresholds
+    weighted_score = sum(f["score"] * f["weight"] for f in factors)
+    score  = _clamp(weighted_score)
+    signal = "BULLISH" if score >= 60 else ("BEARISH" if score <= 40 else "NEUTRAL")
+
     return _to_json_safe({
         "score":      score,
         "signal":     signal,
         "factors":    factors,
+        "mlSignal":   {
+            "signal":     ml_result.signal,
+            "bullProb":   ml_result.bull_prob,
+            "confidence": ml_result.confidence,
+            "trainedOn":  ml_result.trained_on,
+        },
         "newsImpact": {
             "keyEvent":       key_event,
             "recentCount":    recent_count,
@@ -531,14 +551,19 @@ def _default_confidence() -> dict:
 
 @app.get("/api/confidence/{ticker}")
 def get_confidence(ticker: str):
+    now = time.monotonic()
+    cached, ts = _CONFIDENCE_CACHE.get(ticker.upper(), (None, 0.0))
+    if cached is not None and now - ts < _CONFIDENCE_CACHE_TTL:
+        return cached
     try:
         prices = df_mod.get_price_history(ticker, period="2y")
         funds  = df_mod.get_financial_metrics(ticker)
         if prices.empty or len(prices) < 120:
             return _default_confidence()
-        result = ml_predict(ticker, prices, funds)
-        score  = int(result.bull_prob * 100)
-        return _build_confidence_payload(ticker, prices, funds, score, result.signal)
+        result = ml_predict(ticker, prices)
+        payload = _build_confidence_payload(ticker, prices, funds, result)
+        _CONFIDENCE_CACHE[ticker.upper()] = (payload, time.monotonic())
+        return payload
     except Exception as exc:
         logger.error("confidence(%s): %s", ticker, exc)
         return _default_confidence()
@@ -548,14 +573,57 @@ def get_confidence(ticker: str):
 # /api/dcf/{ticker}  — DCF valuation  (GET defaults, POST custom)
 # ============================================================
 
+def _rnpv_valuation(ticker: str, info: dict) -> dict:
+    """Compute rNPV-based valuation for pre-revenue pipeline companies."""
+    currency   = info.get("currency", "USD")
+    shares_out = _safe(info.get("sharesOutstanding"), 1e9)
+    current_px = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
+    mktcap     = _safe(info.get("marketCap"), 0)
+
+    raw      = fetch_clinicaltrials(ticker)
+    enriched = enrich_trials(raw) if not raw.empty else raw
+    total_rnpv, detail_df = pipeline_rnpv(enriched)
+
+    rnpv_per_share = (total_rnpv / shares_out) if shares_out else None
+    upside = (rnpv_per_share / current_px - 1) if (rnpv_per_share and current_px) else None
+    pipeline_discount = ((total_rnpv / mktcap) - 1) if (mktcap and mktcap > 0) else None
+
+    detail = []
+    for _, row in detail_df.iterrows():
+        detail.append({
+            "name":          str(row.get("name", ""))[:60],
+            "phase":         row.get("phase"),
+            "probApproval":  round(float(row.get("prob_approval", 0)), 4),
+            "peakSales":     row.get("peak_sales"),
+            "rnpv":          row.get("rnpv"),
+            "devCostPv":     row.get("dev_cost_pv"),
+            "netRnpv":       row.get("net_rnpv"),
+        })
+
+    return _to_json_safe({
+        "impliedSharePrice": round(rnpv_per_share, 2) if rnpv_per_share else None,
+        "upside":            round(upside, 4) if upside is not None else None,
+        "currencySymbol":    _currency_symbol(currency),
+        "valuationMethod":   "rNPV",
+        "rnpvTotal":         round(total_rnpv, 0),
+        "rnpvPerShare":      round(rnpv_per_share, 2) if rnpv_per_share else None,
+        "pipelineDiscount":  round(pipeline_discount, 4) if pipeline_discount is not None else None,
+        "rnpvDetail":        detail,
+        "dcf":               None,
+    })
+
+
 def _run_dcf(ticker: str, assumptions: dict) -> dict:
-    """Compute DCF intrinsic value from assumptions dict."""
+    """Compute DCF intrinsic value. Falls back to rNPV for pre-revenue companies."""
     try:
-        info        = yf.Ticker(ticker).info or {}
+        info        = df_mod._cached_yf_info(ticker)
         currency    = info.get("currency", "USD")
         shares_out  = _safe(info.get("sharesOutstanding"), 1e9)
         revenue     = _safe(info.get("totalRevenue"), 0)
         current_px  = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
+
+        if not revenue or revenue <= 0:
+            return _rnpv_valuation(ticker, info)
 
         g = [
             assumptions.get("revenueGrowthY1", 0.15),
@@ -564,18 +632,14 @@ def _run_dcf(ticker: str, assumptions: dict) -> dict:
             assumptions.get("revenueGrowthY4", 0.08),
             assumptions.get("revenueGrowthY5", 0.06),
         ]
-        wacc           = assumptions.get("wacc", 0.10)
-        terminal_g     = assumptions.get("terminalGrowth", 0.03)
-        op_margin      = assumptions.get("operatingMargin", 0.20)
-        tax_rate       = assumptions.get("taxRate", 0.21)
-        capex_pct      = assumptions.get("capexPercent", 0.05)
+        wacc       = assumptions.get("wacc", 0.10)
+        terminal_g = assumptions.get("terminalGrowth", 0.03)
+        op_margin  = assumptions.get("operatingMargin", 0.20)
+        tax_rate   = assumptions.get("taxRate", 0.21)
+        capex_pct  = assumptions.get("capexPercent", 0.05)
 
-        if revenue <= 0 or shares_out <= 0:
-            return {
-                "impliedSharePrice": None, "upside": None,
-                "currencySymbol": _currency_symbol(currency),
-                "dcf": assumptions,
-            }
+        if shares_out <= 0:
+            return _rnpv_valuation(ticker, info)
 
         fcfs, pv_fcf = [], 0.0
         r_rev = revenue
@@ -586,18 +650,18 @@ def _run_dcf(ticker: str, assumptions: dict) -> dict:
             fcfs.append(fcf)
             pv_fcf += pv
 
-        # Terminal value (Gordon Growth Model on last FCF)
         tv    = fcfs[-1] * (1 + terminal_g) / (wacc - terminal_g)
         pv_tv = tv / (1 + wacc) ** 5
 
-        total_pv       = pv_fcf + pv_tv
-        implied_price  = total_pv / shares_out
-        upside         = (implied_price / current_px - 1) if current_px else None
+        total_pv      = pv_fcf + pv_tv
+        implied_price = total_pv / shares_out
+        upside        = (implied_price / current_px - 1) if current_px else None
 
         return {
             "impliedSharePrice": round(implied_price, 2),
             "upside":            round(upside, 4) if upside is not None else None,
             "currencySymbol":    _currency_symbol(currency),
+            "valuationMethod":   "DCF",
             "dcf": {
                 "revenueGrowthY1": g[0], "revenueGrowthY2": g[1],
                 "revenueGrowthY3": g[2], "revenueGrowthY4": g[3],
@@ -616,7 +680,7 @@ def _run_dcf(ticker: str, assumptions: dict) -> dict:
 
 def _default_assumptions(ticker: str) -> dict:
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = df_mod._cached_yf_info(ticker)
         rev_growth = _safe(info.get("revenueGrowth"), 0.10)
         op_margin  = _safe(info.get("operatingMargins"), 0.20)
         return {
@@ -654,13 +718,27 @@ def update_dcf(ticker: str, body: dict):
 
 
 # ============================================================
+# /api/rnpv/{ticker}  — standalone pipeline rNPV valuation
+# ============================================================
+
+@app.get("/api/rnpv/{ticker}")
+def get_rnpv(ticker: str):
+    try:
+        info = df_mod._cached_yf_info(ticker)
+        return _rnpv_valuation(ticker, info)
+    except Exception as exc:
+        logger.error("rnpv(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
 # /api/scenarios/{ticker}  — 3-scenario + Monte Carlo
 # ============================================================
 
 @app.get("/api/scenarios/{ticker}")
 def get_scenarios(ticker: str):
     try:
-        info     = yf.Ticker(ticker).info or {}
+        info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
         sym      = _currency_symbol(currency)
         current  = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
@@ -669,9 +747,8 @@ def get_scenarios(ticker: str):
         target_h = _safe(info.get("targetHighPrice"), 0)
         target_l = _safe(info.get("targetLowPrice"), 0)
 
-        # 3-scenario model
         if not current:
-            hist = yf.Ticker(ticker).history(period="5d", auto_adjust=True)
+            hist = df_mod.get_price_history(ticker, period="5d")
             current = float(hist["Close"].iloc[-1]) if not hist.empty else 100.0
 
         bull_px  = target_h if target_h else current * 1.45
@@ -688,7 +765,7 @@ def get_scenarios(ticker: str):
         ]
 
         # Monte Carlo (1 year, 1000 simulations)
-        hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+        hist = df_mod.get_price_history(ticker, period="1y")
         daily_vol = 0.02  # default
         if not hist.empty and len(hist) > 20:
             daily_vol = float(hist["Close"].pct_change().dropna().std())
@@ -784,6 +861,8 @@ def add_to_watchlist(body: dict):
         raise HTTPException(status_code=400, detail="symbol required")
     wl = _load_watchlist()
     if symbol not in wl:
+        if len(wl) >= 50:
+            raise HTTPException(status_code=400, detail="Watchlist limit of 50 tickers reached")
         wl.append(symbol)
         _save_watchlist(wl)
     return {"watchlist": wl}
@@ -806,11 +885,11 @@ def get_dual_listing(ticker: str):
     try:
         result = get_dual_listing_info(ticker)
         if result is None:
-            return {"dual_listed": False, "ticker": ticker.upper()}
+            return {"dual_listed": False, "status": "none", "ticker": ticker.upper()}
         return {"dual_listed": True, **result}
     except Exception as exc:
         logger.error("dual_listing(%s): %s", ticker, exc)
-        return {"dual_listed": False, "ticker": ticker.upper()}
+        return {"dual_listed": False, "status": "none", "ticker": ticker.upper()}
 
 
 # ============================================================
@@ -823,7 +902,7 @@ def get_pipeline_summary(ticker: str):
         raw     = fetch_clinicaltrials(ticker)
         enriched = enrich_trials(raw) if not raw.empty else raw
         try:
-            info         = yf.Ticker(ticker).info or {}
+            info         = df_mod._cached_yf_info(ticker)
             company_name = info.get("longName") or info.get("shortName") or ticker
         except Exception:
             company_name = ticker
@@ -836,6 +915,75 @@ def get_pipeline_summary(ticker: str):
             "key_risks": [],
             "upcoming_catalysts": [],
             "ai_generated": False,
+        }
+
+
+# ============================================================
+# /api/pipeline-research/{ticker}  — LLM-powered comprehensive pipeline research
+# ============================================================
+
+@app.get("/api/pipeline-research/{ticker}")
+def get_pipeline_research(ticker: str):
+    """
+    AI-powered pipeline research: returns ALL known programs (owned + partnered +
+    in-licensed), with TAM estimates and competitive context, regardless of whether
+    trials are registered under the company's own name on ClinicalTrials.gov.
+
+    Then enriches any returned NCT IDs with live CT.gov data for current status
+    and enrollment figures.
+    """
+    try:
+        ticker = ticker.upper()
+        try:
+            info         = df_mod._cached_yf_info(ticker)
+            company_name = info.get("longName") or info.get("shortName") or ticker
+        except Exception:
+            company_name = ticker
+
+        result = research_full_pipeline(ticker, company_name)
+
+        # Enrich with live CT.gov data for any NCT IDs the LLM returned
+        all_nct_ids = []
+        for prog in result.get("programs", []):
+            all_nct_ids.extend(prog.get("nct_ids") or [])
+
+        if all_nct_ids:
+            live_df = fetch_clinicaltrials_by_nct_ids(all_nct_ids)
+            live_map: dict = {}
+            if not live_df.empty:
+                for _, row in live_df.iterrows():
+                    nid = row.get("nct_id")
+                    if nid:
+                        live_map[nid] = {
+                            "status":      row.get("status"),
+                            "enrollment":  row.get("enrollment"),
+                            "start_date":  row.get("start_date"),
+                            "completion":  row.get("primary_completion_date"),
+                            "ct_title":    row.get("title"),
+                            "ct_sponsor":  row.get("sponsor"),
+                        }
+            for prog in result.get("programs", []):
+                ct_enrichments = [live_map[nid] for nid in (prog.get("nct_ids") or []) if nid in live_map]
+                if ct_enrichments:
+                    prog["ct_data"] = ct_enrichments[0]  # primary NCT enrichment
+                    # Prefer live CT.gov status over LLM guess
+                    if ct_enrichments[0].get("status"):
+                        prog["ct_status"] = ct_enrichments[0]["status"]
+                        prog["ct_enrollment"] = ct_enrichments[0]["enrollment"]
+
+        result["ticker"] = ticker
+        result["company_name"] = company_name
+        return result
+
+    except Exception as exc:
+        logger.error("pipeline_research(%s): %s", ticker, exc)
+        return {
+            "programs": [],
+            "pipeline_summary": "Pipeline research unavailable.",
+            "hk_china_angle": "",
+            "data_note": "",
+            "ai_generated": False,
+            "ticker": ticker,
         }
 
 
@@ -866,6 +1014,10 @@ def get_filings(ticker: str):
 # ============================================================
 # /api/flow/{ticker}  — CCASS shareholding snapshots (HK)
 # ============================================================
+
+# Confidence results — cache per ticker for 5 minutes (ML training + LLM call are expensive)
+_CONFIDENCE_CACHE: dict[str, tuple[dict, float]] = {}
+_CONFIDENCE_CACHE_TTL = 300  # seconds
 
 # CCASS data changes monthly — cache each ticker for 1 hour so repeated loads are instant
 _FLOW_CACHE: dict[str, tuple[list, float]] = {}
@@ -907,7 +1059,7 @@ def get_flow(ticker: str):
 def get_sources(ticker: str):
     """Return curated deep-link URLs for every data source relevant to this ticker."""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = df_mod._cached_yf_info(ticker)
         company_name = (info.get("longName") or info.get("shortName") or ticker).strip()
     except Exception:
         company_name = ticker
@@ -941,6 +1093,198 @@ def get_sources(ticker: str):
         )
 
     return {"ticker": ticker.upper(), "company": company_name, "sources": sources}
+
+
+# ============================================================
+# /api/backtest/{ticker}  — RSI+MACD strategy backtest
+# ============================================================
+
+_BACKTEST_CACHE: dict[str, tuple[dict, float]] = {}
+_BACKTEST_CACHE_TTL = 3600  # hourly — price-derived, stable intraday
+
+
+@app.get("/api/backtest/{ticker}")
+def get_backtest(ticker: str, period: str = "2y"):
+    key = f"{ticker.upper()}:{period}"
+    now = time.monotonic()
+    cached, ts = _BACKTEST_CACHE.get(key, (None, 0.0))
+    if cached is not None and now - ts < _BACKTEST_CACHE_TTL:
+        return cached
+    try:
+        prices = df_mod.get_price_history(ticker, period=period)
+        if prices.empty or len(prices) < 50:
+            raise HTTPException(status_code=502, detail="Insufficient price history")
+        result = _backtester.run_backtest(prices)
+        equity = [
+            {"date": str(idx.date()), "value": round(float(v), 2)}
+            for idx, v in result.equity_curve.items()
+            if not math.isnan(float(v))
+        ]
+        trades = []
+        if not result.trade_log.empty:
+            for _, row in result.trade_log.tail(50).iterrows():
+                trades.append({
+                    "entryDate":  str(row["entry_date"].date()) if hasattr(row["entry_date"], "date") else str(row["entry_date"]),
+                    "exitDate":   str(row["exit_date"].date())  if hasattr(row["exit_date"],  "date") else str(row["exit_date"]),
+                    "entryPrice": round(float(row["entry_price"]), 4),
+                    "exitPrice":  round(float(row["exit_price"]),  4),
+                    "pnlPct":     round(float(row["pnl_pct"]), 2),
+                    "holdDays":   int(row["hold_days"]),
+                    "exitReason": row["exit_reason"],
+                })
+        payload = _to_json_safe({
+            "metrics":     result.metrics,
+            "equityCurve": equity,
+            "trades":      trades,
+            "ticker":      ticker.upper(),
+            "period":      period,
+        })
+        _BACKTEST_CACHE[key] = (payload, time.monotonic())
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("backtest(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/screen  — alpha screener
+# ============================================================
+
+_SCREEN_CACHE: dict[str, tuple[dict, float]] = {}
+_SCREEN_CACHE_TTL = 1800  # 30 minutes
+
+
+@app.get("/api/screen")
+def get_screen(region: str = "HK"):
+    region = region.upper()
+    if region not in ("HK", "US"):
+        raise HTTPException(status_code=400, detail="region must be HK or US")
+    now = time.monotonic()
+    cached, ts = _SCREEN_CACHE.get(region, (None, 0.0))
+    if cached is not None and now - ts < _SCREEN_CACHE_TTL:
+        return cached
+    try:
+        df = _screener.run_screen(region=region, top_n=15)
+        if df.empty:
+            return {"region": region, "results": [], "cachedAt": None}
+        results = []
+        for _, row in df.iterrows():
+            results.append(_to_json_safe({
+                "rank":         int(row["rank"]),
+                "ticker":       row["ticker"],
+                "totalScore":   row["total_score"],
+                "momentum":     row["momentum"],
+                "value":        row["value"],
+                "pipeline":     row["pipeline"],
+                "quality":      row["quality"],
+                "technical":    row["technical"],
+                "marketCap":    row.get("market_cap"),
+                "psRatio":      row.get("ps_ratio"),
+                "revenueGrowth":row.get("revenue_growth"),
+            }))
+        payload = {
+            "region":   region,
+            "results":  results,
+            "cachedAt": datetime.utcnow().isoformat() + "Z",
+        }
+        _SCREEN_CACHE[region] = (payload, time.monotonic())
+        return payload
+    except Exception as exc:
+        logger.error("screen(%s): %s", region, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/risk/{ticker}  — bear-case risk factor analysis
+# ============================================================
+
+_RISK_CACHE: dict[str, tuple[dict, float]] = {}
+_RISK_CACHE_TTL = 1800
+
+
+@app.get("/api/risk/{ticker}")
+def get_risk(ticker: str):
+    key = ticker.upper()
+    now = time.monotonic()
+    cached, ts = _RISK_CACHE.get(key, (None, 0.0))
+    if cached is not None and now - ts < _RISK_CACHE_TTL:
+        return cached
+    try:
+        prices = df_mod.get_price_history(ticker, period="1y")
+        funds  = df_mod.get_financial_metrics(ticker)
+        trials_raw = fetch_clinicaltrials(ticker)
+        trials = enrich_trials(trials_raw) if not trials_raw.empty else trials_raw
+        info   = df_mod._cached_yf_info(ticker)
+        risks  = _devil.analyse(ticker, prices, funds, trials, info)
+        summary = _devil.risk_summary(risks)
+        factors = [
+            {
+                "category": r.category,
+                "title":    r.title,
+                "detail":   r.detail,
+                "severity": r.severity,
+                "evidence": r.evidence,
+            }
+            for r in risks
+        ]
+        payload = {"ticker": key, "summary": summary, "factors": factors}
+        _RISK_CACHE[key] = (payload, time.monotonic())
+        return payload
+    except Exception as exc:
+        logger.error("risk(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/earnings/{ticker}  — EPS history + analyst targets
+# ============================================================
+
+@app.get("/api/earnings/{ticker}")
+def get_earnings(ticker: str):
+    try:
+        data = _earnings.earnings_summary(ticker)
+        eps_df = data.get("quarterly_eps_df")
+        rev_df = data.get("annual_revenue_df")
+
+        quarterly_eps = []
+        if eps_df is not None and not eps_df.empty:
+            for _, row in eps_df.iterrows():
+                quarterly_eps.append(_to_json_safe({
+                    "date":       str(row.get("Date", row.index if hasattr(row, "index") else "")),
+                    "reported":   row.get("Reported EPS"),
+                    "estimated":  row.get("Estimated EPS"),
+                    "surprisePct":row.get("Surprise %"),
+                    "beat":       bool(row["Beat"]) if "Beat" in row and row["Beat"] is not None else None,
+                }))
+
+        annual_revenue = []
+        if rev_df is not None and not rev_df.empty:
+            for _, row in rev_df.iterrows():
+                annual_revenue.append(_to_json_safe({
+                    "date":       str(row.get("Date", "")),
+                    "revenue":    row.get("Revenue"),
+                    "yoyGrowthPct": row.get("YoY Growth %"),
+                }))
+
+        return _to_json_safe({
+            "ticker":           ticker.upper(),
+            "nextEarningsDate": data.get("next_earnings_date"),
+            "beatRate8q":       data.get("beat_rate_8q"),
+            "avgSurprisePct":   data.get("avg_surprise_pct"),
+            "revenueCagr3y":    data.get("revenue_cagr_3y"),
+            "targetMean":       data.get("target_mean"),
+            "targetHigh":       data.get("target_high"),
+            "targetLow":        data.get("target_low"),
+            "recommendation":   data.get("recommendation"),
+            "nAnalysts":        data.get("n_analysts"),
+            "quarterlyEps":     quarterly_eps,
+            "annualRevenue":    annual_revenue,
+        })
+    except Exception as exc:
+        logger.error("earnings(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 # ============================================================

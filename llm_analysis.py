@@ -96,6 +96,57 @@ Rules:
 - Be concise — each list entry should be one sentence.\
 """
 
+_PIPELINE_RESEARCH_SYSTEM = """\
+You are a senior biotech equity analyst at a tier-1 investment bank covering Hong Kong \
+and US-listed biopharmaceuticals. You have deep familiarity with drug pipelines sourced \
+from annual reports, investor presentations, HKEX/SEC filings, ClinicalTrials.gov, \
+ChiCTR (China Clinical Trial Registry), and press releases.
+
+Given a company name and ticker, return a comprehensive pipeline analysis covering ALL \
+known programs — owned, in-licensed, and partnered — including preclinical assets if \
+publicly disclosed.
+
+Critical nuance for HK-listed biotechs: many trials are registered under a PARTNER \
+company's name on ClinicalTrials.gov (e.g. Inhibrx, Lilly, AstraZeneca), not the \
+HK company. Include these and note the trial sponsor/partner.
+
+Return EXACTLY this JSON structure — no markdown fences, no extra text:
+{
+  "programs": [
+    {
+      "drug_name": "Generic or code name (e.g. Osemitamab / TST001)",
+      "target": "Molecular target (e.g. CLDN18.2)",
+      "mechanism": "One-line MOA (e.g. Anti-CLDN18.2 IgG1 monoclonal antibody)",
+      "indication": "Primary indication (e.g. Gastric/GEJ cancer)",
+      "secondary_indications": [],
+      "phase": "Preclinical|Phase 1|Phase 1/2|Phase 2|Phase 2/3|Phase 3|Approved|Discontinued",
+      "status": "Active|Recruiting|Completed|Suspended|Discontinued|Not yet recruiting",
+      "owned_or_licensed": "Owned|In-licensed|Out-licensed",
+      "partner": "Partner company name or null",
+      "rights": "Geographic rights this company holds (e.g. Greater China, Global, Asia-Pacific)",
+      "nct_ids": ["NCT05190575"],
+      "chictr_ids": [],
+      "tam_usd_bn": 4.5,
+      "tam_basis": "~130k annual gastric cancer incidence in China + Japan; $35k/yr treatment × 40% penetration ≈ $1.8B China TAM; global TAM ~$4.5B by 2030",
+      "competition": ["Zolbetuximab (Astellas)", "other competitor drugs"],
+      "key_data": ["Phase 1/2a ORR 35% in 1L G/GEJ (n=20, ASCO 2024)"],
+      "risk": "LOW|MEDIUM|HIGH|VERY_HIGH",
+      "next_catalyst": "Phase 2 interim data expected H1 2026"
+    }
+  ],
+  "pipeline_summary": "2-3 sentence overall pipeline assessment covering stage distribution, therapeutic focus, and differentiation",
+  "hk_china_angle": "Specific Greater Bay Area / China market opportunity or NMPA regulatory pathway notes",
+  "data_note": "Brief note on data vintage and what may have changed since training cutoff"
+}
+
+Formatting rules:
+- tam_usd_bn: null if genuinely unknown; never fabricate a number. Show your logic in tam_basis.
+- nct_ids / chictr_ids: include only if you know them with high confidence; empty array otherwise.
+- competition: top 2-3 drugs in same indication/target class, not an exhaustive list.
+- Do NOT omit programs just because trials are registered under a partner's name.
+- risk: base on phase, data quality, competition density, and binary event risk.\
+"""
+
 
 # ---------------------------------------------------------------------------
 # analyze_news_sentiment
@@ -223,3 +274,64 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
     except Exception as exc:
         logger.error("summarize_pipeline(%s): %s", company_name, exc)
         return _PIPELINE_DEFAULT.copy()
+
+
+# ---------------------------------------------------------------------------
+# research_full_pipeline  — comprehensive AI pipeline research with TAM
+# ---------------------------------------------------------------------------
+
+_RESEARCH_DEFAULT: dict[str, Any] = {
+    "programs":        [],
+    "pipeline_summary": "AI pipeline research unavailable — ANTHROPIC_API_KEY not set.",
+    "hk_china_angle":  "",
+    "data_note":       "",
+    "ai_generated":    False,
+}
+
+_RESEARCH_MODEL = "claude-sonnet-4-6"  # use Sonnet for richer knowledge
+
+
+def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
+    """
+    Comprehensive drug pipeline research using Claude.
+
+    Returns ALL known programs — owned, in-licensed, partnered — with TAM estimates
+    and competitive context. Uses Sonnet (better knowledge) rather than Haiku.
+    Falls back gracefully if the API key is absent.
+    """
+    if not _has_api_key():
+        return _RESEARCH_DEFAULT.copy()
+
+    user_prompt = (
+        f"Company: {company_name}\n"
+        f"Stock ticker: {ticker}\n\n"
+        f"Please research and return this company's complete drug pipeline including "
+        f"all clinical and significant preclinical programs, regardless of whether the "
+        f"trial is registered under their name or a partner's name on ClinicalTrials.gov."
+    )
+
+    try:
+        resp = _client().messages.create(
+            model=_RESEARCH_MODEL,
+            max_tokens=2048,
+            system=[
+                {
+                    "type": "text",
+                    "text": _PIPELINE_RESEARCH_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw = resp.content[0].text
+        result = _parse_json(raw)
+        return {
+            "programs":        result.get("programs", []),
+            "pipeline_summary": result.get("pipeline_summary", ""),
+            "hk_china_angle":  result.get("hk_china_angle", ""),
+            "data_note":       result.get("data_note", ""),
+            "ai_generated":    True,
+        }
+    except Exception as exc:
+        logger.error("research_full_pipeline(%s): %s", ticker, exc)
+        return _RESEARCH_DEFAULT.copy()

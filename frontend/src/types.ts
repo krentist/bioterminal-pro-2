@@ -278,6 +278,50 @@ export interface FlowEntry {
   snapshot_date: string;
 }
 
+// ── Pipeline research (AI-powered) ───────────────────────────────────────────
+
+export interface PipelineProgram {
+  drug_name:            string;
+  target:               string | null;
+  mechanism:            string | null;
+  indication:           string;
+  secondary_indications?: string[];
+  phase:                string;
+  status:               string | null;
+  owned_or_licensed:    string | null;
+  partner:              string | null;
+  rights:               string | null;
+  nct_ids:              string[];
+  chictr_ids:           string[];
+  tam_usd_bn:           number | null;
+  tam_basis:            string | null;
+  competition:          string[];
+  key_data:             string[];
+  risk:                 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH' | null;
+  next_catalyst:        string | null;
+  // CT.gov live enrichment (may be absent)
+  ct_status?:           string | null;
+  ct_enrollment?:       number | null;
+  ct_data?:             {
+    status: string | null;
+    enrollment: number | null;
+    start_date: string | null;
+    completion: string | null;
+    ct_title: string | null;
+    ct_sponsor: string | null;
+  };
+}
+
+export interface PipelineResearch {
+  programs:         PipelineProgram[];
+  pipeline_summary: string;
+  hk_china_angle:   string;
+  data_note:        string;
+  ai_generated:     boolean;
+  ticker:           string;
+  company_name:     string;
+}
+
 // ── Dual listing ──────────────────────────────────────────────────────────────
 
 export interface DualListingData {

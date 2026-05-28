@@ -224,51 +224,101 @@ def fetch_yfinance_news(ticker: str, limit: int = 50) -> pd.DataFrame:
 
 def fetch_clinicaltrials(ticker: str) -> pd.DataFrame:
     """
-    Look up company name from yfinance, then search ClinicalTrials.gov by sponsor.
-    Falls back to a ticker-based keyword search if the name lookup fails.
+    Look up company name from yfinance, generate multiple name variants, then
+    search ClinicalTrials.gov as both sponsor and collaborator. Deduplicates by NCT ID.
     """
     try:
         meta = fetch_yfinance_metadata(ticker)
         company_name = meta.get("name") or ticker
-        # Strip common suffixes that confuse the search
-        clean_name = re.sub(
-            r"\s+(Inc\.?|Corp\.?|Ltd\.?|LLC\.?|PLC\.?|S\.A\.?|A\.G\.?|AG|Holdings?|Therapeutics?|Biosciences?|Pharmaceuticals?|Biopharma)$",
-            "",
-            company_name,
-            flags=re.IGNORECASE,
-        ).strip()
-        return fetch_clinicaltrials_by_sponsor(clean_name)
+        variants = _ct_name_variants(company_name)
+        return fetch_clinicaltrials_multi(variants)
     except Exception as exc:
         logger.error("fetch_clinicaltrials(%s): %s", ticker, exc)
         return _empty_trials_df()
 
 
-def fetch_clinicaltrials_by_sponsor(sponsor_name: str, page_size: int = 50) -> pd.DataFrame:
-    """Search ClinicalTrials.gov v2 API by sponsor/company name."""
+def _ct_name_variants(company_name: str) -> list[str]:
+    """Generate search term variants by progressively stripping corporate suffixes."""
+    suffixes = re.compile(
+        r"\s+(Inc\.?|Corp\.?|Ltd\.?|LLC\.?|PLC\.?|S\.A\.?|A\.G\.?|AG|"
+        r"Holdings?|Holding|Therapeutics?|Biosciences?|Pharmaceuticals?|"
+        r"Biopharma|Biotech|Oncology|Sciences?|Medical|Biopharmaceuticals?)$",
+        flags=re.IGNORECASE,
+    )
+    seen: list[str] = []
+    current = company_name.strip()
+    while True:
+        if current and current not in seen:
+            seen.append(current)
+        stripped = suffixes.sub("", current).strip()
+        if stripped == current or not stripped:
+            break
+        current = stripped
+    # Also add a version dropping everything after the first comma or parenthesis
+    base = re.split(r"[,(]", company_name)[0].strip()
+    if base and base not in seen:
+        seen.append(base)
+    return seen[:4]  # cap at 4 queries to avoid rate-limiting
+
+
+def fetch_clinicaltrials_multi(search_terms: list[str], page_size: int = 50) -> pd.DataFrame:
+    """
+    Search ClinicalTrials.gov with multiple terms (sponsor field + general term),
+    deduplicating results by NCT ID.
+    """
+    seen_ids: set[str] = set()
+    all_rows: list[dict] = []
+
+    for term in search_terms:
+        for field in ("query.spons", "query.term"):
+            rows = _ct_search_raw(term, field, page_size)
+            for row in rows:
+                nct = row.get("nct_id")
+                if nct and nct not in seen_ids:
+                    seen_ids.add(nct)
+                    all_rows.append(row)
+
+    return pd.DataFrame(all_rows) if all_rows else _empty_trials_df()
+
+
+def fetch_clinicaltrials_by_nct_ids(nct_ids: list[str]) -> pd.DataFrame:
+    """
+    Fetch clinical trial details for a specific list of NCT IDs.
+    Used to enrich LLM-discovered programs with live CT.gov data.
+    """
+    if not nct_ids:
+        return _empty_trials_df()
+    filter_expr = " OR ".join(f"AREA[NCTId]{nid}" for nid in nct_ids[:20])
+    rows = _ct_search_raw(filter_expr, "filter.advanced", len(nct_ids) + 5)
+    return pd.DataFrame(rows) if rows else _empty_trials_df()
+
+
+def _ct_search_raw(term: str, field: str, page_size: int) -> list[dict]:
+    """Single ClinicalTrials.gov query; returns list of row dicts."""
     params = {
-        "query.term": sponsor_name,
-        "fields": _CT_FIELDS,
-        "format": "json",
-        "pageSize": page_size,
+        field:        term,
+        "fields":     _CT_FIELDS,
+        "format":     "json",
+        "pageSize":   page_size,
     }
     try:
         resp = requests.get(_CT_BASE, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        logger.error("fetch_clinicaltrials_by_sponsor(%s): %s", sponsor_name, exc)
-        return _empty_trials_df()
+        logger.debug("_ct_search_raw(%s, %s): %s", field, term[:40], exc)
+        return []
 
     rows = []
     for study in data.get("studies", []):
-        ps = study.get("protocolSection", {})
+        ps       = study.get("protocolSection", {})
         id_mod   = ps.get("identificationModule", {})
         stat_mod = ps.get("statusModule", {})
         design   = ps.get("designModule", {})
         cond_mod = ps.get("conditionsModule", {})
         spon_mod = ps.get("sponsorCollaboratorsModule", {})
 
-        phases = design.get("phases", [])
+        phases    = design.get("phases", [])
         phase_str = ", ".join(p.replace("PHASE", "Phase ") for p in phases) if phases else "N/A"
 
         rows.append({
@@ -282,7 +332,12 @@ def fetch_clinicaltrials_by_sponsor(sponsor_name: str, page_size: int = 50) -> p
             "enrollment":              design.get("enrollmentInfo", {}).get("count"),
             "sponsor":                 spon_mod.get("leadSponsor", {}).get("name"),
         })
+    return rows
 
+
+def fetch_clinicaltrials_by_sponsor(sponsor_name: str, page_size: int = 50) -> pd.DataFrame:
+    """Legacy single-term search kept for backward compatibility."""
+    rows = _ct_search_raw(sponsor_name, "query.spons", page_size)
     return pd.DataFrame(rows) if rows else _empty_trials_df()
 
 

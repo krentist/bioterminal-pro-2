@@ -1,6 +1,8 @@
 import type {
   Quote, Bar, Fundamentals, Trial, NewsItem,
   ConfidenceData, DCFData, ScenariosData, SearchResult,
+  RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
+  Filing, FlowEntry, DualListingData,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -39,5 +41,23 @@ export async function addToWatchlist(ticker: string): Promise<void> {
 export async function removeFromWatchlist(ticker: string): Promise<void> {
   await fetch(`/api/watchlist/${enc(ticker)}`, { method: 'DELETE' });
 }
+
+export const fetchRNPV         = (t: string) => get<RNPVData>(`/api/rnpv/${enc(t)}`);
+export const fetchEarnings     = (t: string) => get<EarningsData>(`/api/earnings/${enc(t)}`);
+export const fetchRisk         = (t: string) => get<RiskData>(`/api/risk/${enc(t)}`);
+export const fetchBacktest     = (t: string, period = '2y') =>
+  get<BacktestData>(`/api/backtest/${enc(t)}?period=${period}`);
+export const fetchScreen       = (region: 'HK' | 'US') =>
+  get<ScreenerData>(`/api/screen?region=${region}`);
+export const fetchFilings      = (t: string) => get<Filing[]>(`/api/filings/${enc(t)}`);
+export const fetchFlow         = (t: string) => get<FlowEntry[]>(`/api/flow/${enc(t)}`);
+export const fetchDualListing  = (t: string) => get<DualListingData>(`/api/dual-listing/${enc(t)}`);
+export const fetchPipelineSummary = (t: string) =>
+  get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(
+    `/api/pipeline-summary/${enc(t)}`
+  );
+
+export const fetchPipelineResearch = (t: string) =>
+  get<import('./types').PipelineResearch>(`/api/pipeline-research/${enc(t)}`);
 
 function enc(s: string) { return encodeURIComponent(s); }
