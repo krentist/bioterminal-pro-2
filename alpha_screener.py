@@ -37,7 +37,8 @@ DEFAULT_US_UNIVERSE = [
 ]
 
 DEFAULT_HK_UNIVERSE = [
-    "6160.HK",  # BeiGene
+    # Core GBA large-cap biotech
+    "6160.HK",  # BeiGene / BeOne Medicines
     "2269.HK",  # WuXi Biologics
     "2359.HK",  # WuXi AppTec
     "1801.HK",  # Innovent Biologics
@@ -45,11 +46,30 @@ DEFAULT_HK_UNIVERSE = [
     "1093.HK",  # CSPC Pharmaceutical
     "1177.HK",  # Sino Biopharmaceutical
     "9688.HK",  # Zai Lab
+    "0013.HK",  # HUTCHMED (China)
+    # Oncology / antibody platforms
     "9995.HK",  # RemeGen
+    "6963.HK",  # Akeso (bispecific antibodies, ivonescimab)
+    "2577.HK",  # Junshi Biosciences (toripalimab PD-1)
+    "2252.HK",  # Shanghai Henlius Biologic (biosimilars)
+    "2137.HK",  # Adagene (antibody platform)
+    "2119.HK",  # Bio-Thera Solutions (biosimilars)
+    # CAR-T / cell & gene therapy
+    "9987.HK",  # Legend Biotech (ciltacabtagene, CAR-T)
+    # Small-molecule / specialty pharma
+    "2096.HK",  # Simcere Pharmaceutical
+    "2186.HK",  # Luye Pharma
+    "0867.HK",  # China Medical System Holdings
+    "2552.HK",  # Hua Medicine (GKA for T2D)
+    "2176.HK",  # Gan & Lee Pharmaceuticals (insulin)
+    "1530.HK",  # 3SBio (biologic therapeutics, EPO)
+    # CRO / CDMO / tools
+    "1873.HK",  # Viva Biotech (CRO / fragment-based drug discovery)
+    "6998.HK",  # Genor Biopharma (biosimilars)
+    # Pan-China pharma
     "2616.HK",  # CStone Pharmaceuticals
     "6185.HK",  # CanSino Biologics
     "2196.HK",  # Shanghai Fosun Pharma
-    "0013.HK",  # HUTCHMED (China)
 ]
 
 

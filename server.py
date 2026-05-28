@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import re
+from urllib.parse import quote as _url_quote
 
 import numpy as np
 import pandas as pd
@@ -357,8 +358,9 @@ def get_trials(ticker: str):
         enriched = enrich_trials(raw)
         trials = []
         for _, row in enriched.iterrows():
+            nct_id = row.get("nct_id")
             trials.append({
-                "nctId":    row.get("nct_id"),
+                "nctId":    nct_id,
                 "title":    row.get("title"),
                 "phase":    row.get("phase_clean") or row.get("phase"),
                 "status":   row.get("status"),
@@ -368,6 +370,8 @@ def get_trials(ticker: str):
                 "primaryCompletionDate": row.get("primary_completion_date"),
                 "sponsor":  row.get("sponsor"),
                 "probApproval": _safe(float(row.get("prob_approval", 0))),
+                "registry": "ClinicalTrials.gov",
+                "source_url": f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
             })
         return _to_json_safe({"trials": trials})
     except Exception as exc:
@@ -682,24 +686,47 @@ def get_scenarios(ticker: str):
         daily_vol = 0.02  # default
         if not hist.empty and len(hist) > 20:
             daily_vol = float(hist["Close"].pct_change().dropna().std())
+        # Clamp vol and beta to prevent simulation overflow / nan propagation
+        daily_vol = min(max(float(daily_vol) if math.isfinite(daily_vol) else 0.02, 0.005), 0.08)
+        try:
+            beta_val = min(abs(float(beta)), 2.5)
+        except (TypeError, ValueError):
+            beta_val = 1.0
 
         np.random.seed(42)
         n_sim, n_days = 1000, 252
-        daily_returns = np.random.normal(0, daily_vol * abs(beta), (n_sim, n_days))
-        final_prices  = current * np.prod(1 + daily_returns, axis=1)
+        # Clip daily returns so individual steps can never go below -50%
+        daily_returns = np.clip(
+            np.random.normal(0, daily_vol * beta_val, (n_sim, n_days)),
+            -0.5, 0.5,
+        )
+        final_prices = current * np.prod(1 + daily_returns, axis=1)
+        # Replace any non-finite or non-positive prices with the starting price
+        final_prices = np.where(
+            np.isfinite(final_prices) & (final_prices > 0), final_prices, current
+        )
+
+        def _safe_round(v: float) -> float:
+            """Return v rounded to 2dp; fall back to 0.0 if not finite."""
+            return round(v, 2) if math.isfinite(v) and v > 0 else 0.0
+
+        # Build 100 representative simulation paths (every 10th sim, 51 points each)
+        sim_paths = []
+        for r in daily_returns[::10]:
+            path: list[float] = []
+            for d in range(0, n_days, 5):
+                prod = float(np.prod(1 + r[:d])) if d > 0 else 1.0
+                p = current * prod
+                path.append(_safe_round(p))
+            sim_paths.append(path)
 
         mc = {
-            "percentile5":  round(float(np.percentile(final_prices, 5)), 2),
-            "percentile25": round(float(np.percentile(final_prices, 25)), 2),
-            "median":       round(float(np.median(final_prices)), 2),
-            "percentile75": round(float(np.percentile(final_prices, 75)), 2),
-            "percentile95": round(float(np.percentile(final_prices, 95)), 2),
-            # 100 representative paths (every 10th simulation)
-            "simulations": [
-                [round(float(current * np.prod(1 + r[:d])), 2)
-                 for d in range(0, n_days, 5)]
-                for r in daily_returns[::10]
-            ],
+            "percentile5":  _safe_round(float(np.percentile(final_prices, 5))),
+            "percentile25": _safe_round(float(np.percentile(final_prices, 25))),
+            "median":       _safe_round(float(np.median(final_prices))),
+            "percentile75": _safe_round(float(np.percentile(final_prices, 75))),
+            "percentile95": _safe_round(float(np.percentile(final_prices, 95))),
+            "simulations":  sim_paths,
         }
 
         return _to_json_safe({
@@ -864,6 +891,50 @@ def get_flow(ticker: str):
     except Exception as exc:
         logger.error("flow(%s): %s", ticker, exc)
         return []
+
+
+# ============================================================
+# /api/sources/{ticker}  — research shortcut URLs
+# ============================================================
+
+@app.get("/api/sources/{ticker}")
+def get_sources(ticker: str):
+    """Return curated deep-link URLs for every data source relevant to this ticker."""
+    try:
+        info = yf.Ticker(ticker).info or {}
+        company_name = (info.get("longName") or info.get("shortName") or ticker).strip()
+    except Exception:
+        company_name = ticker
+
+    name_q = _url_quote(company_name)
+    is_hk  = ticker.upper().endswith(".HK")
+
+    sources: dict[str, str] = {
+        "clinicaltrials_url": (
+            f"https://clinicaltrials.gov/search?query={name_q}&aggFilters=studyType:int"
+        ),
+        "who_ictrp_url": (
+            f"https://trialsearch.who.int/AdvSearch.aspx?SearchTerms={name_q}"
+        ),
+    }
+
+    if is_hk:
+        raw_code = ticker.upper().replace(".HK", "").lstrip("0") or "0"
+        hk_code  = f"{int(raw_code):04d}"
+        sources["hkexnews_url"] = (
+            f"https://www1.hkexnews.hk/search/titlesearch.xhtml?r=&kw={hk_code}"
+        )
+        sources["nmpa_url"]  = "https://www.nmpa.gov.cn/"
+        sources["ctctr_url"] = "http://www.chinadrugtrials.org.cn/index.html"
+        sources["yicai_url"] = f"https://www.yicai.com/search/?keywords={name_q}"
+    else:
+        ticker_q = _url_quote(ticker.upper())
+        sources["sec_edgar_url"] = (
+            f"https://www.sec.gov/cgi-bin/browse-edgar"
+            f"?action=getcompany&company={ticker_q}&type=10-K&dateb=&owner=include&count=10"
+        )
+
+    return {"ticker": ticker.upper(), "company": company_name, "sources": sources}
 
 
 # ============================================================

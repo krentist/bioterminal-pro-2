@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+
+# Data files (user-specific, not for deployment)
+usage_log.jsonl
+watchlist.json
+
+# Old UI backup (keep locally, not in repo)
+assets-old/
+index-old.html
+
+# Frontend build artifacts (already compiled into assets/)
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store
