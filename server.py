@@ -91,8 +91,14 @@ class _APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         raw_path = request.url.path
         # Requests via /port/5000/ are from the compiled SPA — allow without key.
-        # External clients call /api/ directly and must provide X-API-Key.
         if raw_path.startswith("/port/5000/"):
+            return await call_next(request)
+        # Same-origin browser requests (SPA fetch) carry a Referer matching this host.
+        referer = request.headers.get("referer", "")
+        host = request.headers.get("host", "")
+        if host and referer and (
+            referer.startswith(f"https://{host}/") or referer.startswith(f"http://{host}/")
+        ):
             return await call_next(request)
         path = raw_path
         if path.startswith("/api/") and path not in _PUBLIC_API_PATHS:

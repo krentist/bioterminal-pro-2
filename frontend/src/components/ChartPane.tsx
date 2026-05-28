@@ -16,10 +16,10 @@ interface Props {
 
 const T = {
   dark: {
-    bg:       '#161b22',
+    bg:       '#111111',
     text:     '#8b949e',
-    grid:     '#21262d',
-    border:   '#30363d',
+    grid:     '#1a1a1a',
+    border:   '#2a2a2a',
     upColor:  '#3fb950',
     dnColor:  '#f85149',
     upVol:    'rgba(63, 185, 80, 0.25)',
