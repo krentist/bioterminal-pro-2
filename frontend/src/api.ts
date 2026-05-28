@@ -18,6 +18,16 @@ export const fetchTrials       = (t: string) => get<{ trials: Trial[] }>(`/api/t
 export const fetchNews         = (t: string) => get<NewsItem[]>(`/api/news/${enc(t)}`);
 export const fetchConfidence   = (t: string) => get<ConfidenceData>(`/api/confidence/${enc(t)}`);
 export const fetchDCF          = (t: string) => get<DCFData>(`/api/dcf/${enc(t)}`);
+
+export async function postDCF(t: string, assumptions: Record<string, number>): Promise<DCFData> {
+  const res = await fetch(`/api/dcf/${enc(t)}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(assumptions),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 export const fetchScenarios    = (t: string) => get<ScenariosData>(`/api/scenarios/${enc(t)}`);
 export const fetchSearch       = (q: string) => get<{ quotes: SearchResult[] }>(`/api/search?q=${enc(q)}`);
 export const fetchWatchlist    = ()           => get<string[]>('/api/watchlist');

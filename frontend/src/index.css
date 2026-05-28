@@ -73,3 +73,35 @@ html, body {
 
 /* ── Suppress lightweight-charts TradingView attribution ── */
 a[href*="tradingview.com"] { display: none !important; }
+
+/* ── DCF range slider ── */
+input[type="range"].dcf-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 2px;
+  background: var(--line);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"].dcf-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--hi);
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+input[type="range"].dcf-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.3);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hi) 20%, transparent);
+}
+input[type="range"].dcf-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--hi);
+  border: none;
+  cursor: pointer;
+}
