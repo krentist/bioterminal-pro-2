@@ -834,8 +834,18 @@ def get_filings(ticker: str):
 # /api/flow/{ticker}  — CCASS shareholding snapshots (HK)
 # ============================================================
 
+# CCASS data changes monthly — cache each ticker for 1 hour so repeated loads are instant
+_FLOW_CACHE: dict[str, tuple[list, float]] = {}
+_FLOW_CACHE_TTL = 3600  # seconds
+
+
 @app.get("/api/flow/{ticker}")
 def get_flow(ticker: str):
+    key = ticker.upper()
+    now = time.monotonic()
+    cached, ts = _FLOW_CACHE.get(key, (None, 0.0))
+    if cached is not None and now - ts < _FLOW_CACHE_TTL:
+        return cached
     try:
         df = df_mod.get_institutional_flow(ticker)
         if df.empty:
@@ -849,6 +859,7 @@ def get_flow(ticker: str):
                 "percentage":       float(row["percentage"]) if pd.notna(row.get("percentage")) else None,
                 "snapshot_date":    str(row.get("snapshot_date") or ""),
             })
+        _FLOW_CACHE[key] = (records, now)
         return records
     except Exception as exc:
         logger.error("flow(%s): %s", ticker, exc)
