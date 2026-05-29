@@ -84,7 +84,7 @@ def _groq_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) 
     return resp.json()["choices"][0]["message"]["content"]
 
 
-_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 
 def _gemini_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
