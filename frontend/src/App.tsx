@@ -96,7 +96,7 @@ export function App() {
   }, [range]); // eslint-disable-line
 
   return (
-    <div className="h-screen flex flex-col bg-base text-ink font-sans overflow-hidden select-none">
+    <div className="h-screen flex flex-col bg-base text-ink font-sans overflow-hidden select-text">
 
       {/* ── Top bar ── */}
       <TopBar

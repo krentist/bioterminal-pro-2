@@ -53,6 +53,11 @@ def _has_any_llm() -> bool:
     return _has_api_key() or _has_groq_key() or _has_gemini_key()
 
 
+def _safe_err(exc: Exception) -> str:
+    """Return exception message with any ?key=... query params stripped."""
+    return re.sub(r"\?key=[^&\s\"']+", "?key=REDACTED", str(exc))
+
+
 def _groq_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
     """Call Groq (Llama 3.3 70B) via OpenAI-compatible REST — no extra package."""
     headers = {
@@ -275,7 +280,7 @@ def analyze_news_sentiment(headlines: list[str], ticker: str) -> dict:
             "ai_generated":   True,
         }
     except Exception as exc:
-        logger.error("analyze_news_sentiment(%s): %s", ticker, exc)
+        logger.error("analyze_news_sentiment(%s): %s", ticker, _safe_err(exc))
         return _SENTIMENT_DEFAULT.copy()
 
 
@@ -329,7 +334,7 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
             "ai_generated":         True,
         }
     except Exception as exc:
-        logger.error("summarize_pipeline(%s): %s", company_name, exc)
+        logger.error("summarize_pipeline(%s): %s", company_name, _safe_err(exc))
         return _PIPELINE_DEFAULT.copy()
 
 
@@ -374,7 +379,8 @@ def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
             "ai_generated":     True,
         }
     except Exception as exc:
-        logger.error("research_full_pipeline(%s): %s", ticker, exc)
+        safe = _safe_err(exc)
+        logger.error("research_full_pipeline(%s): %s", ticker, safe)
         result = _RESEARCH_DEFAULT.copy()
-        result["pipeline_summary"] = f"AI research failed: {exc}"
+        result["pipeline_summary"] = f"AI research failed: {safe}"
         return result
