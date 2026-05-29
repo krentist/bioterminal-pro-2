@@ -49,8 +49,12 @@ def _has_gemini_key() -> bool:
     return bool(os.getenv("GEMINI_API_KEY"))
 
 
+def _has_openrouter_key() -> bool:
+    return bool(os.getenv("OPENROUTER_API_KEY"))
+
+
 def _has_any_llm() -> bool:
-    return _has_api_key() or _has_groq_key() or _has_gemini_key()
+    return _has_api_key() or _has_groq_key() or _has_gemini_key() or _has_openrouter_key()
 
 
 def _safe_err(exc: Exception) -> str:
@@ -113,9 +117,33 @@ def _gemini_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
+def _openrouter_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
+    """Call OpenRouter with Llama 3.3 70B (free tier, OpenAI-compatible)."""
+    headers = {
+        "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://bioterminal.pro",
+        "X-Title": "BioTerminal Pro",
+    }
+    payload = {
+        "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+    }
+    resp = _requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json=payload, headers=headers, timeout=90,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 def _llm_call(system_prompt: str, user_prompt: str, max_tokens: int = 512,
               prefer_sonnet: bool = False) -> str:
-    """Route to Anthropic → Groq → Gemini, whichever key is available."""
+    """Route to Anthropic → Groq → OpenRouter → Gemini, whichever key is set."""
     if _has_api_key():
         model = "claude-sonnet-4-6" if prefer_sonnet else _MODEL
         resp = _anthropic_client().messages.create(
@@ -128,6 +156,8 @@ def _llm_call(system_prompt: str, user_prompt: str, max_tokens: int = 512,
         return resp.content[0].text
     if _has_groq_key():
         return _groq_generate(system_prompt, user_prompt, max_tokens)
+    if _has_openrouter_key():
+        return _openrouter_generate(system_prompt, user_prompt, max_tokens)
     return _gemini_generate(system_prompt, user_prompt, max_tokens)
 
 

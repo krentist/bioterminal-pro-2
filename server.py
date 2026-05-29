@@ -937,11 +937,12 @@ def debug_llm():
         return val[:8] + "..." + f" ({len(val)} chars)"
 
     status = {
-        "ANTHROPIC_API_KEY": _mask("ANTHROPIC_API_KEY"),
-        "GEMINI_API_KEY":    _mask("GEMINI_API_KEY"),
-        "GROQ_API_KEY":      _mask("GROQ_API_KEY"),
-        "GEMINI_MODEL":      os.getenv("GEMINI_MODEL", "gemini-1.5-flash (default)"),
-        "any_llm_detected":  _llm._has_any_llm(),
+        "ANTHROPIC_API_KEY":  _mask("ANTHROPIC_API_KEY"),
+        "GEMINI_API_KEY":     _mask("GEMINI_API_KEY"),
+        "GROQ_API_KEY":       _mask("GROQ_API_KEY"),
+        "OPENROUTER_API_KEY": _mask("OPENROUTER_API_KEY"),
+        "GEMINI_MODEL":       os.getenv("GEMINI_MODEL", "gemini-1.5-flash (default)"),
+        "any_llm_detected":   _llm._has_any_llm(),
     }
 
     # Attempt a minimal LLM call
