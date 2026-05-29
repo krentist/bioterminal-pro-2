@@ -97,6 +97,18 @@ def _gemini_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
     resp = _requests.post(url, json=payload, timeout=90)
+    if resp.status_code == 403:
+        raise RuntimeError(
+            "Gemini 403 Forbidden — the Generative Language API is not enabled for this "
+            "project. Go to console.cloud.google.com → APIs & Services → Library → "
+            "search 'Generative Language API' → Enable. "
+            f"(model: {_GEMINI_MODEL})"
+        )
+    if resp.status_code == 404:
+        raise RuntimeError(
+            f"Gemini 404 — model '{_GEMINI_MODEL}' not found. "
+            "Set GEMINI_MODEL env var to a valid model name, e.g. gemini-2.0-flash"
+        )
     resp.raise_for_status()
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
