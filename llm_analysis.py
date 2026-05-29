@@ -375,4 +375,6 @@ def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
         }
     except Exception as exc:
         logger.error("research_full_pipeline(%s): %s", ticker, exc)
-        return _RESEARCH_DEFAULT.copy()
+        result = _RESEARCH_DEFAULT.copy()
+        result["pipeline_summary"] = f"AI research failed: {exc}"
+        return result

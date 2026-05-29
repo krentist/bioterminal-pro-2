@@ -919,6 +919,51 @@ def get_pipeline_summary(ticker: str):
 
 
 # ============================================================
+# /api/debug/llm  — diagnose LLM provider configuration
+# ============================================================
+
+@app.get("/api/debug/llm")
+def debug_llm():
+    """
+    Returns which LLM keys are detected and whether a minimal test call succeeds.
+    Safe to expose: API key values are never returned, only their presence/prefix.
+    """
+    import llm_analysis as _llm
+
+    def _mask(key_name: str) -> str:
+        val = os.getenv(key_name, "")
+        if not val:
+            return "NOT SET"
+        return val[:8] + "..." + f" ({len(val)} chars)"
+
+    status = {
+        "ANTHROPIC_API_KEY": _mask("ANTHROPIC_API_KEY"),
+        "GEMINI_API_KEY":    _mask("GEMINI_API_KEY"),
+        "GROQ_API_KEY":      _mask("GROQ_API_KEY"),
+        "GEMINI_MODEL":      os.getenv("GEMINI_MODEL", "gemini-1.5-flash (default)"),
+        "any_llm_detected":  _llm._has_any_llm(),
+    }
+
+    # Attempt a minimal LLM call
+    if _llm._has_any_llm():
+        try:
+            raw = _llm._llm_call(
+                "You are a test assistant. Reply with valid JSON only.",
+                'Return exactly: {"ok": true}',
+                max_tokens=20,
+            )
+            status["test_call"] = "SUCCESS"
+            status["test_response"] = raw[:200]
+        except Exception as exc:
+            status["test_call"] = "FAILED"
+            status["test_error"] = str(exc)
+    else:
+        status["test_call"] = "SKIPPED — no LLM key set"
+
+    return status
+
+
+# ============================================================
 # /api/pipeline-research/{ticker}  — LLM-powered comprehensive pipeline research
 # ============================================================
 
@@ -979,7 +1024,7 @@ def get_pipeline_research(ticker: str):
         logger.error("pipeline_research(%s): %s", ticker, exc)
         return {
             "programs": [],
-            "pipeline_summary": "Pipeline research unavailable.",
+            "pipeline_summary": f"Pipeline research unavailable: {exc}",
             "hk_china_angle": "",
             "data_note": "",
             "ai_generated": False,
