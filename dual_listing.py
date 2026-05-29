@@ -12,24 +12,39 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-# Bidirectional map — HK ↔ US ticker pairs (confirmed active dual-listings)
-# ADS ratio is 1:1 for all entries (1 ADS = 1 ordinary share)
+# Active dual-listings — bidirectional HK ↔ US ticker pairs.
+# Only include pairs where the US ADS is currently trading.
 DUAL_LISTED: dict[str, str] = {
     # HK → US
-    "9688.HK": "ZLAB",   # Zai Lab
-    "0013.HK": "HCM",    # HUTCHMED (China)
-    "6160.HK": "BGNE",   # BeiGene (HK listing active even if US ADS delisted)
+    "9688.HK": "ZLAB",   # Zai Lab (NASDAQ: ZLAB, active)
+    "0013.HK": "HCM",    # HUTCHMED (NASDAQ: HCM, active)
     # US → HK
     "ZLAB": "9688.HK",
     "HCM":  "0013.HK",
-    "BGNE": "6160.HK",
 }
 
 # How many ordinary shares each ADS represents
 ADS_RATIO: dict[str, float] = {
     "ZLAB": 10.0,   # 1 ADS = 10 ordinary shares
     "HCM":  5.0,    # 1 ADS = 5 ordinary shares
-    "BGNE": 1.0,    # 1 ADS = 1 ordinary share
+}
+
+# Tickers with terminated US ADS programs — shown as historical context, not live prices
+DELISTED_ADS: dict[str, dict] = {
+    "6160.HK": {
+        "us_ticker": "BGNE",
+        "delisted_date": "2024-08-22",
+        "exchange": "NASDAQ",
+        "note": "BeiGene voluntarily delisted its US ADS from NASDAQ in August 2024. "
+                "The HK listing (6160.HK) remains active.",
+    },
+    "BGNE": {
+        "hk_ticker": "6160.HK",
+        "delisted_date": "2024-08-22",
+        "exchange": "NASDAQ",
+        "note": "BeiGene voluntarily delisted its US ADS from NASDAQ in August 2024. "
+                "The HK listing (6160.HK) remains active.",
+    },
 }
 
 _USDHKD_TICKER = "USDHKD=X"
@@ -64,14 +79,24 @@ def get_dual_listing_info(ticker: str) -> dict | None:
     """
     Return dual-listing data for a ticker, or None if not dual-listed.
 
-    Response keys:
-        ticker, counterpart_ticker,
-        hk_ticker, us_ticker,
+    Also returns delisted ADS history for tickers like BeiGene/BGNE whose US
+    program was terminated, so the frontend can show an informative state.
+
+    Response keys (active):
+        ticker, counterpart_ticker, hk_ticker, us_ticker,
         hk_price_hkd, us_price_usd, us_price_hkd,
-        premium_discount_pct,   # positive = HK premium, negative = HK discount
-        usdhkd_rate
+        premium_discount_pct, usdhkd_rate, status="active"
+
+    Response keys (delisted):
+        ticker, status="delisted", delisted_date, note
     """
     t = ticker.strip().upper()
+
+    # Check for terminated ADS program first
+    delisted = DELISTED_ADS.get(t)
+    if delisted:
+        return {"ticker": t, "status": "delisted", **delisted}
+
     counterpart = DUAL_LISTED.get(t)
     if not counterpart:
         return None
@@ -105,4 +130,5 @@ def get_dual_listing_info(ticker: str) -> dict | None:
         "premium_discount_pct": premium_discount,
         "usdhkd_rate":          round(rate, 4),
         "ads_ratio":            ads_ratio,
+        "status":               "active",
     }

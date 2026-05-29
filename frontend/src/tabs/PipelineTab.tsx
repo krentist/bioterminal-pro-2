@@ -351,7 +351,7 @@ export function PipelineTab({ ticker }: { ticker: string }) {
         setResearch(d);
         setShowAI(true);
       })
-      .catch(() => setAiError('AI pipeline research failed — check ANTHROPIC_API_KEY is set'))
+      .catch(() => setAiError('AI pipeline research failed — please try again'))
       .finally(() => setAiLoading(false));
   }
 

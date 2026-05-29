@@ -17,8 +17,10 @@ Usage
 """
 from __future__ import annotations
 
+import time
 import warnings
 from dataclasses import dataclass
+from threading import Lock
 from typing import Optional
 
 import numpy as np
@@ -28,15 +30,21 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
 
+_MODEL_CACHE: dict[str, tuple["PredictionResult", float]] = {}
+_MODEL_CACHE_LOCK = Lock()
+_MODEL_CACHE_TTL = 600  # 10 minutes
+
 # ---------------------------------------------------------------------------
 # Feature engineering
 # ---------------------------------------------------------------------------
 
-def build_features(prices: pd.DataFrame, fundamentals: dict) -> pd.DataFrame:
+def build_features(prices: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute a single-row feature DataFrame from price history + fundamentals.
+    Compute a single-row feature DataFrame from price history alone.
 
-    Requires at least 60 trading days of price history.
+    Requires at least 60 trading days. Fundamentals are intentionally excluded
+    to avoid look-ahead bias: using today's P/E for historical training windows
+    contaminates the feature set with future information.
     """
     if prices.empty or len(prices) < 60:
         return pd.DataFrame()
@@ -84,19 +92,10 @@ def build_features(prices: pd.DataFrame, fundamentals: dict) -> pd.DataFrame:
     bb_std = closes.rolling(20).std().iloc[-1]
     features["bb_position"] = (closes.iloc[-1] - bb_mid) / (2 * bb_std) if bb_std else np.nan
 
-    # --- Fundamentals ---
-    features["pe_ratio"]     = _clip(fundamentals.get("pe_ratio"), 0, 200)
-    features["pb_ratio"]     = _clip(fundamentals.get("pb_ratio"), 0, 50)
-    features["ps_ratio"]     = _clip(fundamentals.get("ps_ratio"), 0, 100)
-    features["ev_revenue"]   = _clip(fundamentals.get("ev_revenue"), 0, 200)
-    features["beta"]         = _clip(fundamentals.get("beta"), -3, 5)
-    features["profit_margin"]= _clip(fundamentals.get("profit_margin"), -2, 1)
-    features["revenue_growth"]= _clip(fundamentals.get("revenue_growth"), -1, 5)
-
     return pd.DataFrame([features])
 
 
-def build_training_dataset(prices: pd.DataFrame, fundamentals: dict, lookahead: int = 20) -> tuple[pd.DataFrame, pd.Series]:
+def build_training_dataset(prices: pd.DataFrame, lookahead: int = 20) -> tuple[pd.DataFrame, pd.Series]:
     """
     Build a rolling-window feature matrix and binary target for training.
     Each row = features computed at day t; target = 1 if return[t+1:t+lookahead] > 0.
@@ -109,7 +108,7 @@ def build_training_dataset(prices: pd.DataFrame, fundamentals: dict, lookahead: 
 
     for i in range(60, len(prices) - lookahead):
         window = prices.iloc[:i]
-        feats  = build_features(window, fundamentals)
+        feats  = build_features(window)
         if feats.empty:
             continue
         fwd_ret = closes.iloc[i + lookahead] / closes.iloc[i] - 1
@@ -138,22 +137,44 @@ class PredictionResult:
 def predict(
     ticker:       str,
     prices:       pd.DataFrame,
-    fundamentals: dict,
     lookahead:    int = 20,
     n_estimators: int = 200,
 ) -> PredictionResult:
     """
-    Train a RandomForest on historical feature/target pairs, then predict
-    the current signal from the most-recent feature vector.
+    Train a RandomForest on historical price-only feature/target pairs, then predict
+    the current signal. Results are cached per ticker for 10 minutes.
     """
-    X_train, y_train = build_training_dataset(prices, fundamentals, lookahead)
+    now = time.monotonic()
+    with _MODEL_CACHE_LOCK:
+        if ticker in _MODEL_CACHE:
+            cached_result, ts = _MODEL_CACHE[ticker]
+            if now - ts < _MODEL_CACHE_TTL:
+                return cached_result
+
+    result = _train_and_predict(ticker, prices, lookahead, n_estimators)
+
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE[ticker] = (result, time.monotonic())
+
+    return result
+
+
+def _train_and_predict(
+    ticker:       str,
+    prices:       pd.DataFrame,
+    lookahead:    int,
+    n_estimators: int,
+) -> PredictionResult:
+    _neutral = PredictionResult(
+        signal="NEUTRAL", confidence=0.0,
+        bull_prob=0.5, bear_prob=0.5,
+        feature_df=pd.DataFrame(), trained_on=0,
+    )
+
+    X_train, y_train = build_training_dataset(prices, lookahead)
 
     if X_train.empty or len(y_train) < 30:
-        return PredictionResult(
-            signal="NEUTRAL", confidence=0.0,
-            bull_prob=0.5, bear_prob=0.5,
-            feature_df=pd.DataFrame(), trained_on=0,
-        )
+        return _neutral
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_train.fillna(0))
@@ -167,7 +188,7 @@ def predict(
     )
     clf.fit(X_scaled, y_train)
 
-    current_feats = build_features(prices, fundamentals)
+    current_feats = build_features(prices)
     if current_feats.empty:
         return PredictionResult(
             signal="NEUTRAL", confidence=0.0,
@@ -175,16 +196,14 @@ def predict(
             feature_df=pd.DataFrame(), trained_on=len(y_train),
         )
 
-    # Align columns
     current_feats = current_feats.reindex(columns=X_train.columns, fill_value=0).fillna(0)
     X_pred = scaler.transform(current_feats)
     proba  = clf.predict_proba(X_pred)[0]
 
-    # Map classes to bull/bear; class order from sklearn
     classes    = list(clf.classes_)
     bull_prob  = proba[classes.index(1)] if 1 in classes else 0.5
     bear_prob  = proba[classes.index(0)] if 0 in classes else 0.5
-    confidence = abs(bull_prob - 0.5) * 2   # 0 at 50/50, 1 at 100/0
+    confidence = abs(bull_prob - 0.5) * 2
 
     if bull_prob >= 0.60:
         signal = "BULLISH"
@@ -193,11 +212,9 @@ def predict(
     else:
         signal = "NEUTRAL"
 
-    # Feature importance table
-    importances = clf.feature_importances_
     feat_df = pd.DataFrame({
         "feature":    X_train.columns,
-        "importance": importances,
+        "importance": clf.feature_importances_,
     }).sort_values("importance", ascending=False).reset_index(drop=True)
 
     return PredictionResult(

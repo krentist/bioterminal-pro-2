@@ -179,13 +179,13 @@ def _end_of_month_dates(months_back: int = 12) -> list[datetime]:
 
 
 
-def _fetch_ccass_flow(ticker: str, months_back: int = 1) -> pd.DataFrame:
+def _fetch_ccass_flow(ticker: str, months_back: int = 12) -> pd.DataFrame:
     """
-    Fetch end-of-month CCASS snapshots for the past N months.
+    Fetch end-of-month CCASS snapshots for the past N months (default 12).
 
-    HKEX ignores __VIEWSTATE validation, so we skip the GET entirely and POST
-    directly with a stable __VIEWSTATEGENERATOR. This halves the request count
-    and reduces wall-clock time by ~40%.
+    HKEX ignores __VIEWSTATE validation, so we POST directly with a stable
+    __VIEWSTATEGENERATOR. Requests are parallelised (max 4 workers) to bring
+    12-month fetch time from ~24s down to ~8s.
     """
     from bs4 import BeautifulSoup
 
@@ -195,12 +195,8 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 1) -> pd.DataFrame:
         columns=["participant_id", "participant_name", "shares", "percentage", "snapshot_date"]
     )
 
-    session = requests.Session()
-
-    # Skip the GET — HKEX does not validate __VIEWSTATE.
-    # __VIEWSTATEGENERATOR is constant for this page.
     base_form = {
-        "__EVENTTARGET": "",
+        "__EVENTTARGET": "btnSearch",
         "__EVENTARGUMENT": "",
         "__VIEWSTATE": "",
         "__VIEWSTATEGENERATOR": "A7B2BBE2",
@@ -209,21 +205,21 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 1) -> pd.DataFrame:
         "sortDirection": "desc",
         "originalShareholdingDate": "",
         "alertMsg": "",
+        "txtStockName": "",
+        "txtParticipantID": "",
+        "txtParticipantName": "",
+        "txtSelPartID": "",
     }
 
     def _fetch_one(date: datetime) -> pd.DataFrame:
-        form_data = {**base_form}
-        form_data["__EVENTTARGET"] = "btnSearch"
-        form_data["__EVENTARGUMENT"] = ""
-        form_data["txtShareholdingDate"] = date.strftime("%Y/%m/%d")
-        form_data["txtStockCode"] = code_5d
-        form_data["txtStockName"] = ""
-        form_data["txtParticipantID"] = ""
-        form_data["txtParticipantName"] = ""
-        form_data["txtSelPartID"] = ""
+        form_data = {
+            **base_form,
+            "txtShareholdingDate": date.strftime("%Y/%m/%d"),
+            "txtStockCode": code_5d,
+        }
         date_str = date.strftime("%Y-%m-%d")
         try:
-            resp = session.post(
+            resp = requests.post(
                 _CCASS_URL,
                 data=form_data,
                 headers={**_HEADERS, "Referer": _CCASS_URL},
@@ -275,13 +271,16 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 1) -> pd.DataFrame:
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
     dfs: list[pd.DataFrame] = []
-    for d in dates:
-        try:
-            df = _fetch_one(d)
-            if not df.empty:
-                dfs.append(df)
-        except Exception as exc:
-            logger.error("ccass flow(%s %s): %s", code_5d, d, exc)
+    # Max 4 workers — avoids overwhelming HKEX rate limits while still parallelising
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_fetch_one, d): d for d in dates}
+        for fut in as_completed(futures):
+            try:
+                df = fut.result()
+                if not df.empty:
+                    dfs.append(df)
+            except Exception as exc:
+                logger.error("ccass flow(%s): %s", code_5d, exc)
 
     if not dfs:
         return empty

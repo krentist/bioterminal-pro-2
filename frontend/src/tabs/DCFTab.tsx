@@ -97,7 +97,7 @@ export function DCFTab({ ticker }: { ticker: string }) {
     fetchDCF(ticker)
       .then(data => {
         setResult(data);
-        setAssumptions(extractAssumptions(data.dcf));
+        setAssumptions(extractAssumptions(data.dcf ?? undefined));
       })
       .catch(() => setError('Failed to load DCF valuation'))
       .finally(() => setLoading(false));

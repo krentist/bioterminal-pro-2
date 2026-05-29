@@ -14,6 +14,7 @@ Scoring dimensions (each 0–20 pts, max 100):
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 
@@ -226,10 +227,12 @@ def run_screen(
         universe = DEFAULT_HK_UNIVERSE if region == "HK" else DEFAULT_US_UNIVERSE
 
     results = []
-    for ticker in universe:
-        row = score_ticker(ticker)
-        if row:
-            results.append(row)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(score_ticker, t): t for t in universe}
+        for fut in as_completed(futures):
+            row = fut.result()
+            if row:
+                results.append(row)
 
     if not results:
         return pd.DataFrame()

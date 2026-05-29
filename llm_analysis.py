@@ -1,14 +1,13 @@
 """
-llm_analysis.py — Claude-powered analysis for BioTerminal Pro.
+llm_analysis.py — LLM-powered analysis for BioTerminal Pro.
+
+Provider priority: Anthropic Claude (if ANTHROPIC_API_KEY set) → Google Gemini
+(if GEMINI_API_KEY set) → graceful default.
 
 Functions:
     analyze_news_sentiment(headlines, ticker) → sentiment dict
     summarize_pipeline(trials_df, company_name) → pipeline risk dict
-
-Both functions:
-  - Use prompt caching (cache_control: ephemeral on system prompts) to minimise cost.
-  - Return a graceful default if ANTHROPIC_API_KEY is absent or the call fails.
-  - Label outputs with ai_generated=True so callers can surface that to users.
+    research_full_pipeline(ticker, company_name) → full pipeline research dict
 """
 from __future__ import annotations
 
@@ -20,6 +19,7 @@ from functools import lru_cache
 from typing import Any
 
 import pandas as pd
+import requests as _requests
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,11 @@ _MAX_TOKENS = 512
 
 
 # ---------------------------------------------------------------------------
-# Client (lazy, cached)
+# Provider helpers
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
-def _client():
+def _anthropic_client():
     import anthropic
     return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -41,16 +41,109 @@ def _has_api_key() -> bool:
     return bool(os.getenv("ANTHROPIC_API_KEY"))
 
 
+def _has_groq_key() -> bool:
+    return bool(os.getenv("GROQ_API_KEY"))
+
+
+def _has_gemini_key() -> bool:
+    return bool(os.getenv("GEMINI_API_KEY"))
+
+
+def _has_any_llm() -> bool:
+    return _has_api_key() or _has_groq_key() or _has_gemini_key()
+
+
+def _groq_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
+    """Call Groq (Llama 3.3 70B) via OpenAI-compatible REST — no extra package."""
+    headers = {
+        "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+    }
+    resp = _requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        json=payload, headers=headers, timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+
+def _gemini_generate(system_prompt: str, user_prompt: str, max_tokens: int = 512) -> str:
+    """Call Gemini via REST using GEMINI_MODEL (default: gemini-1.5-flash)."""
+    api_key = os.environ["GEMINI_API_KEY"]
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{_GEMINI_MODEL}:generateContent"
+        f"?key={api_key}"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens},
+    }
+    resp = _requests.post(url, json=payload, timeout=90)
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _llm_call(system_prompt: str, user_prompt: str, max_tokens: int = 512,
+              prefer_sonnet: bool = False) -> str:
+    """Route to Anthropic → Groq → Gemini, whichever key is available."""
+    if _has_api_key():
+        model = "claude-sonnet-4-6" if prefer_sonnet else _MODEL
+        resp = _anthropic_client().messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=[{"type": "text", "text": system_prompt,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return resp.content[0].text
+    if _has_groq_key():
+        return _groq_generate(system_prompt, user_prompt, max_tokens)
+    return _gemini_generate(system_prompt, user_prompt, max_tokens)
+
+
 # ---------------------------------------------------------------------------
 # JSON parsing helper (handles markdown fences from the model)
 # ---------------------------------------------------------------------------
 
 def _parse_json(text: str) -> dict[str, Any]:
+    """Extract and parse the first JSON object from model output.
+
+    Handles: markdown fences, preamble text, and large nested objects that
+    non-greedy regex would truncate.
+    """
     text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    # Strip markdown fence if present (greedy interior so nested braces are kept)
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
     if fence:
-        text = fence.group(1)
-    return json.loads(text)
+        text = fence.group(1).strip()
+    # Find the start of the JSON object (skip any preamble text)
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in LLM response")
+    # Walk to the matching closing brace to handle nested objects correctly
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start : i + 1])
+    # Fall back: try to parse whatever we have
+    return json.loads(text[start:])
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +255,7 @@ _SENTIMENT_DEFAULT = {
 
 
 def analyze_news_sentiment(headlines: list[str], ticker: str) -> dict:
-    """
-    Analyse a list of news headlines with Claude and return a sentiment dict.
-
-    Returns a default NEUTRAL dict if the API key is missing or the call fails.
-    All successful responses include ai_generated=True.
-    """
-    if not _has_api_key():
+    if not _has_any_llm():
         return _SENTIMENT_DEFAULT.copy()
 
     if not headlines:
@@ -178,19 +265,7 @@ def analyze_news_sentiment(headlines: list[str], ticker: str) -> dict:
     user_prompt = f"Ticker: {ticker}\n\nRecent headlines:\n{headline_block}"
 
     try:
-        resp = _client().messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            system=[
-                {
-                    "type": "text",
-                    "text": _SENTIMENT_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        raw = resp.content[0].text
+        raw = _llm_call(_SENTIMENT_SYSTEM, user_prompt, max_tokens=_MAX_TOKENS)
         result = _parse_json(raw)
         return {
             "sentiment":      result.get("sentiment", "NEUTRAL"),
@@ -217,13 +292,7 @@ _PIPELINE_DEFAULT = {
 
 
 def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
-    """
-    Summarise a company's clinical trial pipeline with Claude.
-
-    Passes the top 5 active trials (title, phase, status, primary completion date).
-    Returns a default dict if the API key is missing or the call fails.
-    """
-    if not _has_api_key():
+    if not _has_any_llm():
         return _PIPELINE_DEFAULT.copy()
 
     if trials_df is None or trials_df.empty:
@@ -251,19 +320,7 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
     )
 
     try:
-        resp = _client().messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            system=[
-                {
-                    "type": "text",
-                    "text": _PIPELINE_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        raw = resp.content[0].text
+        raw = _llm_call(_PIPELINE_SYSTEM, user_prompt, max_tokens=_MAX_TOKENS)
         result = _parse_json(raw)
         return {
             "summary":              result.get("summary", ""),
@@ -282,24 +339,19 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
 
 _RESEARCH_DEFAULT: dict[str, Any] = {
     "programs":        [],
-    "pipeline_summary": "AI pipeline research unavailable — ANTHROPIC_API_KEY not set.",
+    "pipeline_summary": "AI pipeline research unavailable — set ANTHROPIC_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.",
     "hk_china_angle":  "",
     "data_note":       "",
     "ai_generated":    False,
 }
 
-_RESEARCH_MODEL = "claude-sonnet-4-6"  # use Sonnet for richer knowledge
-
 
 def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
     """
-    Comprehensive drug pipeline research using Claude.
-
-    Returns ALL known programs — owned, in-licensed, partnered — with TAM estimates
-    and competitive context. Uses Sonnet (better knowledge) rather than Haiku.
-    Falls back gracefully if the API key is absent.
+    Comprehensive drug pipeline research. Uses Claude Sonnet if available, falls back
+    to Gemini 2.0 Flash (free tier). Returns ALL programs — owned, in-licensed, partnered.
     """
-    if not _has_api_key():
+    if not _has_any_llm():
         return _RESEARCH_DEFAULT.copy()
 
     user_prompt = (
@@ -311,26 +363,15 @@ def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
     )
 
     try:
-        resp = _client().messages.create(
-            model=_RESEARCH_MODEL,
-            max_tokens=2048,
-            system=[
-                {
-                    "type": "text",
-                    "text": _PIPELINE_RESEARCH_SYSTEM,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        raw = resp.content[0].text
+        raw = _llm_call(_PIPELINE_RESEARCH_SYSTEM, user_prompt,
+                        max_tokens=2048, prefer_sonnet=True)
         result = _parse_json(raw)
         return {
-            "programs":        result.get("programs", []),
+            "programs":         result.get("programs", []),
             "pipeline_summary": result.get("pipeline_summary", ""),
-            "hk_china_angle":  result.get("hk_china_angle", ""),
-            "data_note":       result.get("data_note", ""),
-            "ai_generated":    True,
+            "hk_china_angle":   result.get("hk_china_angle", ""),
+            "data_note":        result.get("data_note", ""),
+            "ai_generated":     True,
         }
     except Exception as exc:
         logger.error("research_full_pipeline(%s): %s", ticker, exc)
