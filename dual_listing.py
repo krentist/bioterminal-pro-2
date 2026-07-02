@@ -18,34 +18,24 @@ DUAL_LISTED: dict[str, str] = {
     # HK → US
     "9688.HK": "ZLAB",   # Zai Lab (NASDAQ: ZLAB, active)
     "0013.HK": "HCM",    # HUTCHMED (NASDAQ: HCM, active)
+    "6160.HK": "ONC",    # BeOne Medicines, formerly BeiGene (NASDAQ: ONC, active — BGNE→ONC 2025-01-02)
     # US → HK
     "ZLAB": "9688.HK",
     "HCM":  "0013.HK",
+    "ONC":  "6160.HK",
 }
 
 # How many ordinary shares each ADS represents
 ADS_RATIO: dict[str, float] = {
     "ZLAB": 10.0,   # 1 ADS = 10 ordinary shares
     "HCM":  5.0,    # 1 ADS = 5 ordinary shares
+    "ONC":  13.0,   # 1 ADS = 13 ordinary shares (BeiGene/BeOne, unchanged since 2018)
 }
 
-# Tickers with terminated US ADS programs — shown as historical context, not live prices
-DELISTED_ADS: dict[str, dict] = {
-    "6160.HK": {
-        "us_ticker": "BGNE",
-        "delisted_date": "2024-08-22",
-        "exchange": "NASDAQ",
-        "note": "BeiGene voluntarily delisted its US ADS from NASDAQ in August 2024. "
-                "The HK listing (6160.HK) remains active.",
-    },
-    "BGNE": {
-        "hk_ticker": "6160.HK",
-        "delisted_date": "2024-08-22",
-        "exchange": "NASDAQ",
-        "note": "BeiGene voluntarily delisted its US ADS from NASDAQ in August 2024. "
-                "The HK listing (6160.HK) remains active.",
-    },
-}
+# Tickers with terminated US ADS programs — shown as historical context, not live prices.
+# (BeiGene did NOT delist: it renamed to BeOne Medicines and its Nasdaq ticker changed
+# BGNE→ONC on 2025-01-02; it is an active dual-listing above.)
+DELISTED_ADS: dict[str, dict] = {}
 
 _USDHKD_TICKER = "USDHKD=X"
 

@@ -36,21 +36,52 @@ logger = logging.getLogger(__name__)
 # In-memory TTL cache for yfinance .info calls (60-second TTL)
 # ---------------------------------------------------------------------------
 
-_INFO_CACHE: dict[str, tuple[dict, float]] = {}
+_INFO_CACHE: dict[str, object] = {}
 _INFO_CACHE_LOCK = Lock()
 _INFO_CACHE_TTL = 60  # seconds
+_INFO_LOADING = object()  # sentinel for thundering-herd guard
+
+
+def normalize_ticker(ticker: str) -> str:
+    """Canonicalise a raw ticker via its exchange adapter.
+
+    Bare HK codes ('700', '6160') are padded to '0700.HK' / '6160.HK'; US
+    tickers pass through unchanged. Idempotent, so applying it to an already
+    normalised ticker is a no-op. Lets every server route accept bare codes
+    without each having to know the exchange rules.
+    """
+    try:
+        from exchanges import get_exchange_adapter
+        adapter = get_exchange_adapter(ticker)
+        norm = getattr(adapter, "_normalize_ticker", None)
+        return norm(ticker) if norm else ticker
+    except Exception:
+        return ticker
 
 
 def _cached_yf_info(ticker: str) -> dict:
+    """Fetch yfinance .info with a 60-second TTL cache.
+
+    Uses a sentinel (_INFO_LOADING) so that only one thread fetches from
+    yfinance per ticker; concurrent threads return {} immediately rather
+    than all hammering the upstream API in parallel.
+    """
+    ticker = normalize_ticker(ticker)
     now = time.monotonic()
     with _INFO_CACHE_LOCK:
-        if ticker in _INFO_CACHE:
-            value, ts = _INFO_CACHE[ticker]
+        entry = _INFO_CACHE.get(ticker)
+        if entry is _INFO_LOADING:
+            return {}
+        if entry is not None:
+            value, ts = entry  # type: ignore[misc]
             if now - ts < _INFO_CACHE_TTL:
                 return value
+        _INFO_CACHE[ticker] = _INFO_LOADING  # claim slot
+
     info = yf.Ticker(ticker).info or {}
+
     with _INFO_CACHE_LOCK:
-        _INFO_CACHE[ticker] = (info, now)
+        _INFO_CACHE[ticker] = (info, time.monotonic())
     return info
 
 
@@ -93,6 +124,7 @@ def fetch_yfinance_prices(
     interval: str = "1d",
 ) -> pd.DataFrame:
     """Download OHLCV from yfinance and return a clean DataFrame."""
+    ticker = normalize_ticker(ticker)
     try:
         raw = yf.download(
             ticker,
@@ -184,6 +216,7 @@ def fetch_yfinance_news(ticker: str, limit: int = 50) -> pd.DataFrame:
     provider/canonicalUrl structure.  Older versions had flat top-level keys.
     This function handles both layouts.
     """
+    ticker = normalize_ticker(ticker)
     try:
         t = yf.Ticker(ticker)
         news = t.news or []
@@ -226,15 +259,46 @@ def fetch_clinicaltrials(ticker: str) -> pd.DataFrame:
     """
     Look up company name from yfinance, generate multiple name variants, then
     search ClinicalTrials.gov as both sponsor and collaborator. Deduplicates by NCT ID.
+
+    Ticker-specific overrides (_CT_TICKER_NAME_OVERRIDES) take precedence so that
+    known rebrands or Chinese companies whose CT.gov registration differs from the
+    yfinance display name are always found.
     """
     try:
+        ticker = normalize_ticker(ticker)
         meta = fetch_yfinance_metadata(ticker)
         company_name = meta.get("name") or ticker
         variants = _ct_name_variants(company_name)
-        return fetch_clinicaltrials_multi(variants)
+
+        # Prepend override names so they're searched first; merge without duplicates
+        overrides = _CT_TICKER_NAME_OVERRIDES.get(ticker.upper(), [])
+        merged: list[str] = []
+        for name in overrides + variants:
+            if name and name not in merged:
+                merged.append(name)
+
+        return fetch_clinicaltrials_multi(merged[:6])  # cap at 6 to avoid rate-limiting
     except Exception as exc:
         logger.error("fetch_clinicaltrials(%s): %s", ticker, exc)
         return _empty_trials_df()
+
+
+# Known HK/Chinese ticker → primary CT.gov sponsor name overrides.
+# Used when the yfinance company name diverges from CT.gov registration
+# (e.g. rebrands, English-name differences, Chinese parent vs. trial sponsor).
+_CT_TICKER_NAME_OVERRIDES: dict[str, list[str]] = {
+    "6160.HK": ["BeiGene", "BeOne Medicines"],   # rebranded 2024
+    "2269.HK": ["WuXi Biologics"],
+    "1801.HK": ["Innovent Biologics"],
+    "3692.HK": ["Hansoh Pharmaceutical"],
+    "1093.HK": ["CSPC Pharmaceutical"],
+    "1177.HK": ["Sino Biopharmaceutical", "Sino Biopharm"],
+    "9688.HK": ["Zai Lab"],
+    "9987.HK": ["Legend Biotech"],
+    "9995.HK": ["RemeGen"],
+    "2196.HK": ["Shanghai Fosun Pharmaceutical", "Fosun Pharma"],
+    "2359.HK": ["WuXi AppTec"],
+}
 
 
 def _ct_name_variants(company_name: str) -> list[str]:

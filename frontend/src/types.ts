@@ -50,6 +50,8 @@ export interface Trial {
   conditions?: string[];
   interventions?: string[];
   prob_approval?: number | null;
+  sponsor?: string | null;
+  isLeadSponsor?: boolean;
 }
 
 export interface NewsItem {

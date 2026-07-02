@@ -75,6 +75,14 @@ function CTView({ trials }: { trials: Trial[] }) {
               </td>
               <td className="py-2.5 pr-4 text-ink max-w-xs">
                 <p className="line-clamp-2 leading-snug">{t.title || '—'}</p>
+                {t.isLeadSponsor === false && (
+                  <span
+                    title={t.sponsor ? `Lead sponsor: ${t.sponsor}` : 'Not lead-sponsored by this company'}
+                    className="inline-block mt-0.5 text-[8px] uppercase tracking-wider text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-1 py-0.5"
+                  >
+                    collaborator
+                  </span>
+                )}
               </td>
               <td className="py-2.5 pr-4 whitespace-nowrap">
                 {t.phase ? (
@@ -361,7 +369,14 @@ export function PipelineTab({ ticker }: { ticker: string }) {
       {/* ── Header row: counts + AI button ── */}
       <div className="flex items-center justify-between gap-4">
         <p className="text-[11px] text-dim">
-          {ctLoading ? 'Loading…' : `${trials.length} trial${trials.length !== 1 ? 's' : ''} on ClinicalTrials.gov`}
+          {ctLoading
+            ? 'Loading…'
+            : `${trials.length} trial${trials.length !== 1 ? 's' : ''} on ClinicalTrials.gov`}
+          {!ctLoading && trials.filter(t => t.isLeadSponsor === false).length > 0 && (
+            <span className="text-amber-400/80">
+              {' '}· {trials.filter(t => t.isLeadSponsor === false).length} collaborator-sponsored
+            </span>
+          )}
         </p>
         <div className="flex items-center gap-2">
           {showAI && (

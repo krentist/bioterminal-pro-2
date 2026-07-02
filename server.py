@@ -373,9 +373,20 @@ def get_trials(ticker: str):
         if raw.empty:
             return {"trials": []}
         enriched = enrich_trials(raw)
+        # Distinguish trials this company actually leads from collaborator/registry
+        # matches (name-only hits like unrelated NCI/cooperative-group studies), so the
+        # UI never implies a partner's or registry's trial is this company's own.
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            _company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            _company = ticker
+        terms = _sponsor_match_terms(ticker, _company)
         trials = []
         for _, row in enriched.iterrows():
             nct_id = row.get("nct_id")
+            sponsor = row.get("sponsor")
+            is_lead = bool(sponsor) and any(t in str(sponsor).lower() for t in terms)
             trials.append({
                 "nctId":    nct_id,
                 "title":    row.get("title"),
@@ -385,11 +396,14 @@ def get_trials(ticker: str):
                 "enrollment": _safe(row.get("enrollment")),
                 "startDate":  row.get("start_date"),
                 "primaryCompletionDate": row.get("primary_completion_date"),
-                "sponsor":  row.get("sponsor"),
+                "sponsor":  sponsor,
+                "isLeadSponsor": is_lead,
                 "probApproval": _safe(float(row.get("prob_approval", 0))),
                 "registry": "ClinicalTrials.gov",
                 "source_url": f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
             })
+        # Order lead-sponsor trials first so the company's own pipeline is what's seen.
+        trials.sort(key=lambda t: not t["isLeadSponsor"])
         return _to_json_safe({"trials": trials})
     except Exception as exc:
         logger.error("trials(%s): %s", ticker, exc)

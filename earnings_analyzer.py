@@ -134,6 +134,8 @@ def revenue_cagr(rev_df: pd.DataFrame, years: int = 3) -> float:
 
 def earnings_summary(ticker: str) -> dict:
     """High-level earnings summary dict for the dashboard."""
+    from data_fetcher import normalize_ticker
+    ticker = normalize_ticker(ticker)
     data   = get_earnings_data(ticker)
     eps_df = data["quarterly_eps"]
     rev_df = data["annual_revenue"]
