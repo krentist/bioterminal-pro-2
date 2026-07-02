@@ -132,6 +132,37 @@ export function DCFTab({ ticker }: { ticker: string }) {
     <p className="text-sm text-dim">{error ?? 'No DCF data available'}</p>
   );
 
+  // The backend routes pre-revenue / loss-making companies to rNPV, because a DCF
+  // built on assumed positive margins would be fictitious. Say so plainly rather
+  // than rendering rNPV numbers under DCF sliders that don't apply.
+  if (result.valuationMethod === 'rNPV') {
+    const sym = result.currencySymbol || '$';
+    return (
+      <div className="space-y-4 max-w-lg">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-[11px] text-amber-300/90 leading-relaxed">
+          <strong className="text-amber-300">DCF not applicable.</strong> This company has no
+          positive operating profit, so a discounted-cash-flow model built on assumed margins
+          would be misleading. Clinical-stage biotech is valued by its risk-adjusted pipeline —
+          use the <strong>rNPV</strong> panel. The figure below is that rNPV result.
+        </div>
+        <div className="border border-line rounded bg-surface px-4 py-3">
+          <p className="text-[10px] text-dim uppercase tracking-wider mb-1.5">Intrinsic value — rNPV</p>
+          <p className="text-3xl font-mono font-light text-ink leading-none">
+            {fmt(result.impliedSharePrice, sym)}
+          </p>
+          {result.upside != null && (
+            <p className={`text-[11px] font-mono mt-1 ${result.upside >= 0 ? 'text-up' : 'text-down'}`}>
+              {result.upside >= 0 ? '+' : ''}{(result.upside * 100).toFixed(1)}% vs current price
+            </p>
+          )}
+          {result.assumptionNote && (
+            <p className="text-[10px] text-dim mt-2 leading-relaxed">{result.assumptionNote}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const sym     = result.currencySymbol || '$';
   const upside  = result.upside ?? 0;
   const positive = upside >= 0;

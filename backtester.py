@@ -196,17 +196,31 @@ def _calc_metrics(
 
     win_rate, avg_win, avg_loss = _trade_stats(trades)
 
+    # A strategy that never opened a position has no performance to compare against
+    # buy-and-hold. Reporting "alpha = 0% − buy&hold%" in that case implies the
+    # strategy actively outperformed when it merely sat in cash — so alpha is null.
+    no_trades = trades.empty
+    if no_trades:
+        note = ("Strategy generated no trades in this period — it stayed in cash. "
+                "Strategy return is 0% and alpha versus buy-and-hold is not meaningful.")
+    else:
+        note = ("In-sample results on this single ticker; the strategy is fit and measured "
+                "on the same history, so returns are not out-of-sample. Commissions of 0.1% "
+                "per side are modelled; slippage and market impact are not.")
+
     return {
         "total_return_pct": round(total_return, 2),
         "cagr_pct":         round(cagr, 2),
         "sharpe_ratio":     round(float(sharpe), 3),
         "max_drawdown_pct": round(float(max_dd), 2),
         "bh_return_pct":    round(bh_return, 2),
-        "alpha_pct":        round(total_return - bh_return, 2),
+        "alpha_pct":        None if no_trades else round(total_return - bh_return, 2),
         "n_trades":         len(trades),
         "win_rate_pct":     round(win_rate * 100, 1),
         "avg_win_pct":      round(avg_win, 2),
         "avg_loss_pct":     round(avg_loss, 2),
+        "in_sample":        True,
+        "note":             note,
     }
 
 

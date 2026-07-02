@@ -66,10 +66,20 @@ export interface ConfidenceFactor {
   weight: number;
 }
 
+export interface MLSignal {
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  bullProb: number;
+  confidence: number;
+  trainedOn: number;
+  oosAccuracy?: number | null;
+  oosSamples?: number;
+}
+
 export interface ConfidenceData {
   score: number;
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   factors: ConfidenceFactor[];
+  mlSignal?: MLSignal | null;
   newsImpact: {
     keyEvent: string | null;
     recentCount: number;
@@ -129,6 +139,11 @@ export interface DCFData {
   rnpvPerShare?: number | null;
   pipelineDiscount?: number | null;
   rnpvDetail?: RNPVAsset[];
+  trialsFound?: number;
+  programsValued?: number;
+  sponsorMatched?: boolean;
+  peakSalesAssumption?: number;
+  assumptionNote?: string;
 }
 
 // ── rNPV standalone ──────────────────────────────────────────────────────────
@@ -142,6 +157,11 @@ export interface RNPVData {
   rnpvPerShare: number | null;
   pipelineDiscount: number | null;
   rnpvDetail: RNPVAsset[];
+  trialsFound?: number;
+  programsValued?: number;
+  sponsorMatched?: boolean;
+  peakSalesAssumption?: number;
+  assumptionNote?: string;
 }
 
 // ── Earnings ─────────────────────────────────────────────────────────────────
@@ -222,11 +242,13 @@ export interface BacktestMetrics {
   sharpe_ratio: number;
   max_drawdown_pct: number;
   bh_return_pct: number;
-  alpha_pct: number;
+  alpha_pct: number | null;
   n_trades: number;
   win_rate_pct: number;
   avg_win_pct: number;
   avg_loss_pct: number;
+  in_sample?: boolean;
+  note?: string;
 }
 
 export interface BacktestData {

@@ -55,6 +55,24 @@ export function RNPVTab({ ticker }: { ticker: string }) {
         This is the standard valuation method for clinical-stage biotech companies.
       </div>
 
+      {/* What was actually valued — scope + assumption transparency */}
+      {(data.programsValued != null || data.assumptionNote) && (
+        <div className={`rounded-lg border px-4 py-3 text-[11px] leading-relaxed ${
+          data.sponsorMatched === false
+            ? 'border-amber-500/30 bg-amber-500/10 text-amber-300/90'
+            : 'border-line bg-elevated text-dim'}`}>
+          {data.programsValued != null && (
+            <p className="mb-1 text-ink">
+              Valuing <strong>{data.programsValued}</strong> program
+              {data.programsValued !== 1 ? 's' : ''}
+              {data.trialsFound != null && <> from <strong>{data.trialsFound}</strong> matched trial{data.trialsFound !== 1 ? 's' : ''}</>}
+              {data.sponsorMatched === false && ' (no lead-sponsor match — see caveat)'}.
+            </p>
+          )}
+          {data.assumptionNote && <p>{data.assumptionNote}</p>}
+        </div>
+      )}
+
       {/* Summary pills */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Pill
@@ -139,9 +157,11 @@ export function RNPVTab({ ticker }: { ticker: string }) {
       )}
 
       <p className="text-[10px] text-dim leading-relaxed">
-        Assumptions: $500M peak annual sales per asset · 10% WACC · 12-year patent life ·
-        35% operating margin · $200M remaining development cost. Adjust per company specifics.
-        Phase probabilities from BIO/Informa 2023 report.
+        Assumptions: $500M peak annual sales per program (uniform placeholder, not drug-specific) ·
+        phase-adjusted WACC (8–15%) and remaining dev cost · 12-year patent life · 35% operating
+        margin. Phase probabilities from the BIO/Informa 2023 report. Because peak sales are a
+        blanket assumption, treat the total as a rough pipeline-scale estimate, not a per-asset
+        valuation.
       </p>
     </div>
   );

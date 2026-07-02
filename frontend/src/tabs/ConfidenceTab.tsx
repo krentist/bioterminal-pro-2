@@ -88,6 +88,37 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
         </div>
       </div>
 
+      {/* ML model card — the actual RandomForest, with its honest out-of-sample read */}
+      {data.mlSignal && (
+        <div className="border border-line rounded bg-surface px-3 py-2.5 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-dim uppercase tracking-wider">RandomForest model</p>
+            <SignalBadge signal={data.mlSignal.signal} />
+          </div>
+          <div className="flex items-center gap-4 text-[11px] font-mono">
+            <span className="text-dim">P(outperform) <span className="text-ink">{(data.mlSignal.bullProb * 100).toFixed(0)}%</span></span>
+            <span className="text-dim">trained on <span className="text-ink">{data.mlSignal.trainedOn}</span></span>
+          </div>
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="text-dim">Out-of-sample accuracy:</span>
+            {data.mlSignal.oosAccuracy != null ? (
+              <span className={`font-mono font-semibold ${
+                data.mlSignal.oosAccuracy >= 0.58 ? 'text-up'
+                : data.mlSignal.oosAccuracy >= 0.52 ? 'text-ink' : 'text-down'}`}>
+                {(data.mlSignal.oosAccuracy * 100).toFixed(1)}%
+                <span className="text-dim font-normal"> on {data.mlSignal.oosSamples} held-out days</span>
+              </span>
+            ) : <span className="text-dim">not evaluated</span>}
+          </div>
+          <p className="text-[10px] text-dim leading-relaxed">
+            Price-only technical momentum classifier, retrained per ticker. Accuracy near 50%
+            means the signal has little predictive edge on recent data — treat it as one input,
+            not a forecast. The headline score above is a separate weighted heuristic and is not
+            driven by this model.
+          </p>
+        </div>
+      )}
+
       {/* Factors table */}
       {data.factors?.length > 0 && (
         <div className="border border-line rounded bg-surface">

@@ -50,7 +50,7 @@ from exchanges import get_exchange_adapter
 from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline
 from model import predict as ml_predict
 from pipeline_analyzer import enrich_trials
-from rnpv_calculator import pipeline_rnpv
+from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
 from utils import period_to_dates
 
 logger = logging.getLogger(__name__)
@@ -527,10 +527,12 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
         "signal":     signal,
         "factors":    factors,
         "mlSignal":   {
-            "signal":     ml_result.signal,
-            "bullProb":   ml_result.bull_prob,
-            "confidence": ml_result.confidence,
-            "trainedOn":  ml_result.trained_on,
+            "signal":      ml_result.signal,
+            "bullProb":    ml_result.bull_prob,
+            "confidence":  ml_result.confidence,
+            "trainedOn":   ml_result.trained_on,
+            "oosAccuracy": ml_result.oos_accuracy,
+            "oosSamples":  ml_result.oos_samples,
         },
         "newsImpact": {
             "keyEvent":       key_event,
@@ -595,16 +597,61 @@ def get_confidence(ticker: str):
 # /api/dcf/{ticker}  — DCF valuation  (GET defaults, POST custom)
 # ============================================================
 
+def _sponsor_match_terms(ticker: str, company_name: str) -> list[str]:
+    """Lower-cased name fragments that identify this company as a trial's lead sponsor."""
+    terms: list[str] = []
+    overrides = df_mod._CT_TICKER_NAME_OVERRIDES.get(ticker.upper(), [])
+    for name in overrides + df_mod._ct_name_variants(company_name or ticker):
+        n = (name or "").strip().lower()
+        if len(n) >= 4 and n not in terms:
+            terms.append(n)
+    return terms
+
+
+def _select_pipeline_programs(enriched: "pd.DataFrame", ticker: str, company_name: str) -> tuple["pd.DataFrame", bool]:
+    """
+    Turn a raw trials DataFrame into a defensible list of *programs* for rNPV.
+
+    1. Keep only trials this company actually leads (sponsor name matches), so
+       collaborator/registry noise (NCI, cooperative groups, unrelated studies) is
+       dropped. If nothing matches (common for HK biotechs whose trials are
+       registered under a partner), fall back to all trials and flag it.
+    2. De-duplicate to one program per (phase, primary indication), preferring
+       active trials with larger enrollment — so the same drug run across several
+       trials is not counted as several $500M assets.
+    """
+    if enriched.empty:
+        return enriched, False
+
+    terms = _sponsor_match_terms(ticker, company_name)
+    sponsor_l = enriched.get("sponsor", pd.Series("", index=enriched.index)).fillna("").str.lower()
+    mask = sponsor_l.apply(lambda s: any(t in s for t in terms)) if terms else pd.Series(False, index=enriched.index)
+    sponsor_matched = bool(mask.any())
+    df = enriched[mask].copy() if sponsor_matched else enriched.copy()
+
+    cond = df.get("condition", pd.Series("", index=df.index)).fillna("")
+    df["_indication"] = cond.str.split(",").str[0].str.strip().str.lower()
+    df["_key"] = df["phase_clean"].astype(str) + "|" + df["_indication"]
+    sort_cols = [c for c in ("is_active", "enrollment") if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=False, na_position="last")
+    df = df.drop_duplicates("_key").drop(columns=["_indication", "_key"])
+    return df, sponsor_matched
+
+
 def _rnpv_valuation(ticker: str, info: dict) -> dict:
     """Compute rNPV-based valuation for pre-revenue pipeline companies."""
     currency   = info.get("currency", "USD")
     shares_out = _safe(info.get("sharesOutstanding"), 1e9)
     current_px = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
     mktcap     = _safe(info.get("marketCap"), 0)
+    company_name = info.get("longName") or info.get("shortName") or ticker
 
     raw      = fetch_clinicaltrials(ticker)
     enriched = enrich_trials(raw) if not raw.empty else raw
-    total_rnpv, detail_df = pipeline_rnpv(enriched)
+    trials_found = int(len(enriched))
+    programs, sponsor_matched = _select_pipeline_programs(enriched, ticker, company_name) if not enriched.empty else (enriched, False)
+    total_rnpv, detail_df = pipeline_rnpv(programs)
 
     rnpv_per_share = (total_rnpv / shares_out) if shares_out else None
     upside = (rnpv_per_share / current_px - 1) if (rnpv_per_share and current_px) else None
@@ -632,6 +679,21 @@ def _rnpv_valuation(ticker: str, info: dict) -> dict:
         "pipelineDiscount":  round(pipeline_discount, 4) if pipeline_discount is not None else None,
         "rnpvDetail":        detail,
         "dcf":               None,
+        # Transparency: what was actually valued and under what blanket assumption.
+        "trialsFound":       trials_found,
+        "programsValued":    int(len(detail_df)),
+        "sponsorMatched":    sponsor_matched,
+        "peakSalesAssumption": DEFAULT_PEAK_SALES_USD,
+        "assumptionNote": (
+            "Programs = this company's lead-sponsor trials, de-duplicated by phase and "
+            "indication. Each program uses a uniform " f"${DEFAULT_PEAK_SALES_USD/1e6:.0f}M "
+            "peak-sales placeholder (not drug-specific), so totals are a rough pipeline-scale "
+            "estimate, not a per-asset valuation."
+            if sponsor_matched else
+            "No trials on ClinicalTrials.gov are registered under this company as lead sponsor "
+            "(common for HK/China biotechs whose trials sit under a partner). rNPV is computed "
+            "over all name-matched trials and is therefore unreliable — treat as indicative only."
+        ),
     })
 
 
@@ -643,16 +705,27 @@ def _run_dcf(ticker: str, assumptions: dict) -> dict:
         shares_out  = _safe(info.get("sharesOutstanding"), 1e9)
         revenue     = _safe(info.get("totalRevenue"), 0)
         current_px  = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
+        op_margin_actual = _safe(info.get("operatingMargins"), None)
 
+        # DCF is only coherent for a company that already generates operating profit.
+        # For pre-revenue or loss-making biotech (the bulk of this universe) a DCF built
+        # on assumed positive margins prints a fictitious number, so route to rNPV.
         if not revenue or revenue <= 0:
             return _rnpv_valuation(ticker, info)
+        if op_margin_actual is None or op_margin_actual <= 0:
+            return _rnpv_valuation(ticker, info)
+
+        # Clamp per-year growth so a single noisy yfinance revenueGrowth value can't
+        # compound into a fantasy valuation.
+        def _clamp_growth(x: float) -> float:
+            return min(max(float(x), -0.5), 0.60)
 
         g = [
-            assumptions.get("revenueGrowthY1", 0.15),
-            assumptions.get("revenueGrowthY2", 0.12),
-            assumptions.get("revenueGrowthY3", 0.10),
-            assumptions.get("revenueGrowthY4", 0.08),
-            assumptions.get("revenueGrowthY5", 0.06),
+            _clamp_growth(assumptions.get("revenueGrowthY1", 0.15)),
+            _clamp_growth(assumptions.get("revenueGrowthY2", 0.12)),
+            _clamp_growth(assumptions.get("revenueGrowthY3", 0.10)),
+            _clamp_growth(assumptions.get("revenueGrowthY4", 0.08)),
+            _clamp_growth(assumptions.get("revenueGrowthY5", 0.06)),
         ]
         wacc       = assumptions.get("wacc", 0.10)
         terminal_g = assumptions.get("terminalGrowth", 0.03)
@@ -704,6 +777,8 @@ def _default_assumptions(ticker: str) -> dict:
     try:
         info = df_mod._cached_yf_info(ticker)
         rev_growth = _safe(info.get("revenueGrowth"), 0.10)
+        # Cap the seed so an outlier trailing growth figure doesn't drive a runaway DCF.
+        rev_growth = min(max(rev_growth, -0.5), 0.40)
         op_margin  = _safe(info.get("operatingMargins"), 0.20)
         return {
             "revenueGrowthY1": max(rev_growth, -0.5),
