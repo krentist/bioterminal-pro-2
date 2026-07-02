@@ -3,17 +3,15 @@ import { ChartPane } from '@/components/ChartPane';
 import { Skeleton } from '@/components/Skeleton';
 import { fmt, timeAgo } from '@/lib/utils';
 import { fetchConfidence, fetchTrials, fetchDCF, fetchRisk, fetchNews } from '@/api';
-import type { Bar, ConfidenceData, Trial, DCFData, RiskData, NewsItem, AppTab } from '@/types';
+import { useChartData } from '@/hooks/useChartData';
+import { useIsDark } from '@/hooks/useIsDark';
+import type { ConfidenceData, Trial, DCFData, RiskData, NewsItem, AppTab } from '@/types';
+
+const RANGES = ['1D', '1W', '1M', '3M', '1Y', '5Y'];
 
 interface Props {
-  ticker:        string;
-  bars:          Bar[];
-  range:         string;
-  ranges:        string[];
-  onRangeChange: (r: string) => void;
-  dark:          boolean;
-  chartLoading:  boolean;
-  onTabChange:   (tab: AppTab) => void;
+  ticker:      string;
+  onOpenWindow: (panelId: AppTab) => void;
 }
 
 // ── Panel shell ──────────────────────────────────────────────────────────────
@@ -350,21 +348,23 @@ function NewsPanel({ ticker, onFull }: { ticker: string; onFull: () => void }) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export function OverviewTab({
-  ticker, bars, range, ranges, onRangeChange, dark, chartLoading, onTabChange,
-}: Props) {
+export function OverviewTab({ ticker, onOpenWindow }: Props) {
+  const [range, setRange] = useState('3M');
+  const { bars, loading: chartLoading } = useChartData(ticker, range);
+  const dark = useIsDark();
+
   return (
     <div className="grid grid-cols-3 gap-3">
       {/* Row 1 */}
-      <SignalPanel   ticker={ticker} onFull={() => onTabChange('confidence')} />
-      <PipelinePanel ticker={ticker} onFull={() => onTabChange('pipeline')}   />
+      <SignalPanel   ticker={ticker} onFull={() => onOpenWindow('confidence')} />
+      <PipelinePanel ticker={ticker} onFull={() => onOpenWindow('pipeline')}   />
 
       {/* Chart spans both rows in col 3 */}
       <div className="row-span-2 border border-line rounded-lg bg-surface overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-3 py-2 border-b border-line flex-none">
           <span className="text-[9px] uppercase tracking-widest text-dim font-semibold">Price Chart</span>
           <button
-            onClick={() => onTabChange('fundamentals')}
+            onClick={() => onOpenWindow('fundamentals')}
             className="text-[9px] text-hi hover:opacity-70 transition-opacity font-medium"
           >
             Full view →
@@ -374,8 +374,8 @@ export function OverviewTab({
           <ChartPane
             bars={bars}
             range={range}
-            ranges={ranges}
-            onRangeChange={onRangeChange}
+            ranges={RANGES}
+            onRangeChange={setRange}
             dark={dark}
             loading={chartLoading}
           />
@@ -383,8 +383,8 @@ export function OverviewTab({
       </div>
 
       {/* Row 2 */}
-      <ValuationPanel ticker={ticker} onFull={() => onTabChange('dcf')}  />
-      <RiskPanel      ticker={ticker} onFull={() => onTabChange('risk')} />
+      <ValuationPanel ticker={ticker} onFull={() => onOpenWindow('dcf')}  />
+      <RiskPanel      ticker={ticker} onFull={() => onOpenWindow('risk')} />
     </div>
   );
 }

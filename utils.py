@@ -98,6 +98,8 @@ def period_to_dates(period: str = "1y") -> tuple[datetime, datetime]:
     """Convert a yfinance-style period string to (start, end) datetimes."""
     end = datetime.today()
     mapping = {
+        "1d":   timedelta(days=2),
+        "5d":   timedelta(days=7),
         "1mo":  timedelta(days=30),
         "3mo":  timedelta(days=91),
         "6mo":  timedelta(days=182),

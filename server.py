@@ -92,7 +92,7 @@ class _ValidateTickerMiddleware(BaseHTTPMiddleware):
 
 class _APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if os.getenv("ENV", "development") != "production":
+        if os.getenv("ENV", "production") != "production":  # safe default: production
             return await call_next(request)
         raw_path = request.url.path
         # Requests via /port/5000/ are from the compiled SPA — allow without key.
@@ -270,16 +270,23 @@ def get_realtime(ticker: str):
 
 @app.get("/api/stock/{ticker}")
 def get_stock(ticker: str, range: str = "1y"):
+    # Normalise both the UI range labels (1D, 1W, 1M, 3M, 1Y, 5Y) and raw
+    # yfinance period strings (1d, 5d, 1mo, ...) to a canonical period key.
+    _RANGE_ALIASES = {
+        "1D": "1d", "1W": "5d", "1M": "1mo", "3M": "3mo",
+        "6M": "6mo", "1Y": "1y", "2Y": "2y", "5Y": "5y", "MAX": "max",
+    }
+    period_key = _RANGE_ALIASES.get(range.upper(), range.lower())
     _PERIOD_MAP = {
         "1d": "1d", "5d": "5d", "1mo": "1mo", "3mo": "3mo",
         "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y", "max": "max",
     }
-    yf_period = _PERIOD_MAP.get(range, "1y")
+    yf_period = _PERIOD_MAP.get(period_key, "1y")
     _INTERVAL_MAP = {
         "1d": "2m",  "5d": "15m", "1mo": "1h",  "3mo": "1d",
         "6mo": "1d", "1y": "1d",  "2y": "1d",   "5y": "1wk", "max": "1mo",
     }
-    interval = _INTERVAL_MAP.get(range, "1d")
+    interval = _INTERVAL_MAP.get(period_key, "1d")
     try:
         hist = df_mod.get_price_history(ticker, period=yf_period, interval=interval)
         if hist.empty:
@@ -560,7 +567,22 @@ def get_confidence(ticker: str):
         funds  = df_mod.get_financial_metrics(ticker)
         if prices.empty or len(prices) < 120:
             return _default_confidence()
-        result = ml_predict(ticker, prices)
+
+        # Fetch sector benchmark aligned to ticker's trading days.
+        # US biotech → XBI (SPDR S&P Biotech ETF); HK → 2800.HK (Tracker Fund).
+        # Falls back to absolute-return target if benchmark unavailable.
+        sector_closes: "pd.Series | None" = None
+        try:
+            benchmark = "2800.HK" if ticker.upper().endswith(".HK") else "XBI"
+            sec_hist  = df_mod.get_price_history(benchmark, period="2y")
+            if not sec_hist.empty:
+                aligned = sec_hist["Close"].reindex(prices.index, method="ffill").dropna()
+                if len(aligned) >= len(prices) * 0.9:
+                    sector_closes = aligned.reindex(prices.index)
+        except Exception:
+            pass
+
+        result  = ml_predict(ticker, prices, sector_closes=sector_closes)
         payload = _build_confidence_payload(ticker, prices, funds, result)
         _CONFIDENCE_CACHE[ticker.upper()] = (payload, time.monotonic())
         return payload
@@ -854,9 +876,8 @@ def get_watchlist():
     return _load_watchlist()
 
 
-@app.post("/api/watchlist")
-def add_to_watchlist(body: dict):
-    symbol = (body.get("symbol") or body.get("ticker") or "").strip().upper()
+def _add_watchlist_symbol(symbol: str) -> list[str]:
+    symbol = (symbol or "").strip().upper()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
     wl = _load_watchlist()
@@ -865,6 +886,19 @@ def add_to_watchlist(body: dict):
             raise HTTPException(status_code=400, detail="Watchlist limit of 50 tickers reached")
         wl.append(symbol)
         _save_watchlist(wl)
+    return wl
+
+
+@app.post("/api/watchlist")
+def add_to_watchlist(body: dict):
+    wl = _add_watchlist_symbol(body.get("symbol") or body.get("ticker") or "")
+    return {"watchlist": wl}
+
+
+@app.post("/api/watchlist/{ticker}")
+def add_to_watchlist_path(ticker: str):
+    """Path-param variant used by the SPA (POST /api/watchlist/{ticker})."""
+    wl = _add_watchlist_symbol(ticker)
     return {"watchlist": wl}
 
 
