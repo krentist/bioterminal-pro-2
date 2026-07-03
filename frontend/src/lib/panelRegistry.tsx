@@ -3,6 +3,7 @@ import type { AppTab } from '@/types';
 import { OverviewTab }     from '@/tabs/OverviewTab';
 import { FundamentalsTab } from '@/tabs/FundamentalsTab';
 import { PipelineTab }     from '@/tabs/PipelineTab';
+import { CatalystsTab }    from '@/tabs/CatalystsTab';
 import { RNPVTab }         from '@/tabs/RNPVTab';
 import { DCFTab }          from '@/tabs/DCFTab';
 import { ScenariosTab }    from '@/tabs/ScenariosTab';
@@ -47,6 +48,12 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     description: 'Clinical trial pipeline enriched with AI research and TAM.',
     defaultSize: { w: 620, h: 620 },
     render: ticker => <PipelineTab ticker={ticker} />,
+  },
+  catalysts: {
+    label: 'Catalysts',
+    description: 'Forward calendar of upcoming interventional trial readouts.',
+    defaultSize: { w: 560, h: 560 },
+    render: ticker => <CatalystsTab ticker={ticker} />,
   },
   rnpv: {
     label: 'rNPV',
@@ -129,7 +136,7 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
 };
 
 export const PANEL_ORDER: AppTab[] = [
-  'overview', 'fundamentals', 'pipeline', 'news',
+  'overview', 'fundamentals', 'pipeline', 'catalysts', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
   'filings', 'ccas', 'duallisting', 'screener', 'watchlist',
 ];

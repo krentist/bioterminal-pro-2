@@ -49,7 +49,7 @@ from dual_listing import get_dual_listing_info
 from exchanges import get_exchange_adapter
 from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline
 from model import predict as ml_predict
-from pipeline_analyzer import enrich_trials
+from pipeline_analyzer import enrich_trials, upcoming_catalysts
 from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
 from utils import period_to_dates
 
@@ -311,12 +311,62 @@ def get_stock(ticker: str, range: str = "1y"):
 # /api/fundamentals/{ticker}
 # ============================================================
 
+def _compute_runway(ticker: str, info: dict) -> dict:
+    """
+    Cash runway — the single most-watched clinical-stage biotech metric.
+
+    Burn is taken from the annual cash-flow *statement* (Free Cash Flow, then
+    Operating Cash Flow), which is far more reliable than the yfinance .info
+    scalar; the .info fields are used only as a last resort. A positive burn
+    source means the company funds itself, so runway does not apply. Burn is
+    returned as a positive annual cash-consumption figure and runway in years.
+    """
+    cash     = _safe(info.get("totalCash"))
+    stmt     = df_mod.get_annual_cashflow(ticker)
+    fcf_stmt = _safe(stmt.get("free_cash_flow"))
+    ocf_stmt = _safe(stmt.get("operating_cash_flow"))
+    info_ocf = _safe(info.get("operatingCashflow"))
+    info_fcf = _safe(info.get("freeCashflow"))
+
+    if fcf_stmt is not None:
+        burn_source, basis = fcf_stmt, "freeCashflow"
+    elif ocf_stmt is not None:
+        burn_source, basis = ocf_stmt, "operatingCashflow"
+    elif info_ocf is not None:
+        burn_source, basis = info_ocf, "operatingCashflow"
+    elif info_fcf is not None:
+        burn_source, basis = info_fcf, "freeCashflow"
+    else:
+        burn_source, basis = None, None
+
+    annual_burn = None
+    runway_years = None
+    cash_generating = None
+    if burn_source is not None:
+        cash_generating = burn_source >= 0
+        if not cash_generating:
+            annual_burn = -burn_source
+            if cash and annual_burn > 0:
+                runway_years = round(cash / annual_burn, 2)
+    return {
+        "cash":              cash,
+        "freeCashflow":      fcf_stmt if fcf_stmt is not None else info_fcf,
+        "operatingCashflow": ocf_stmt if ocf_stmt is not None else info_ocf,
+        "annualBurn":        annual_burn,
+        "runwayYears":       runway_years,
+        "cashGenerating":    cash_generating,
+        "burnBasis":         basis,
+    }
+
+
 @app.get("/api/fundamentals/{ticker}")
 def get_fundamentals(ticker: str):
     try:
         info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
+        runway   = _compute_runway(ticker, info)
         return _to_json_safe({
+            **runway,
             "marketCap":       info.get("marketCap"),
             "enterpriseValue": info.get("enterpriseValue"),
             "forwardPE":       info.get("forwardPE"),
@@ -408,6 +458,62 @@ def get_trials(ticker: str):
     except Exception as exc:
         logger.error("trials(%s): %s", ticker, exc)
         return {"trials": []}
+
+
+# ============================================================
+# /api/catalysts/{ticker}  — upcoming trial readout calendar
+# ============================================================
+
+@app.get("/api/catalysts/{ticker}")
+def get_catalysts(ticker: str, within_days: int = 540):
+    """
+    Forward calendar of clinical catalysts: trials whose primary-completion date is in
+    the future and within `within_days`, nearest first. Built from the same CT.gov data
+    as the pipeline, using the tested date logic in pipeline_analyzer.upcoming_catalysts.
+    """
+    try:
+        within_days = max(1, min(int(within_days), 1825))
+        raw = fetch_clinicaltrials(ticker)
+        if raw.empty:
+            return {"catalysts": [], "withinDays": within_days}
+        enriched = enrich_trials(raw)
+        upcoming = upcoming_catalysts(enriched, within_days=within_days)
+        # A catalyst calendar is about interventional readouts. Drop registry noise
+        # (retrospective/observational "Other" studies) and post-marketing Phase 4.
+        _INTERVENTIONAL = {"Phase 1", "Phase 1/2", "Phase 2", "Phase 2/3", "Phase 3", "NDA/BLA"}
+        if not upcoming.empty and "phase_clean" in upcoming.columns:
+            upcoming = upcoming[upcoming["phase_clean"].isin(_INTERVENTIONAL)]
+        if upcoming.empty:
+            return {"catalysts": [], "withinDays": within_days}
+
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            _company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            _company = ticker
+        terms = _sponsor_match_terms(ticker, _company)
+
+        catalysts = []
+        for _, row in upcoming.iterrows():
+            nct_id  = row.get("nct_id")
+            sponsor = row.get("sponsor")
+            catalysts.append({
+                "nctId":        nct_id,
+                "title":        row.get("title"),
+                "phase":        row.get("phase_clean") or row.get("phase"),
+                "status":       row.get("status"),
+                "condition":    row.get("condition"),
+                "date":         row.get("primary_completion_date"),
+                "daysAway":     _safe(row.get("days_to_primary")),
+                "sponsor":      sponsor,
+                "isLeadSponsor": bool(sponsor) and any(t in str(sponsor).lower() for t in terms),
+                "probApproval": _safe(float(row.get("prob_approval", 0))),
+                "source_url":   f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
+            })
+        return _to_json_safe({"catalysts": catalysts, "withinDays": within_days})
+    except Exception as exc:
+        logger.error("catalysts(%s): %s", ticker, exc)
+        return {"catalysts": [], "withinDays": within_days}
 
 
 # ============================================================

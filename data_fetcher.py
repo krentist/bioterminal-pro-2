@@ -85,6 +85,50 @@ def _cached_yf_info(ticker: str) -> dict:
     return info
 
 
+# ---------------------------------------------------------------------------
+# Cash-flow statement cache (for cash-burn / runway)
+# ---------------------------------------------------------------------------
+
+_CASHFLOW_CACHE: dict[str, tuple[dict, float]] = {}
+_CASHFLOW_CACHE_LOCK = Lock()
+_CASHFLOW_CACHE_TTL = 600  # 10 minutes
+
+
+def get_annual_cashflow(ticker: str) -> dict:
+    """Latest annual Free Cash Flow / Operating Cash Flow from the cash-flow statement.
+
+    The yfinance ``.info`` ``freeCashflow`` scalar is unreliable (it can be a single
+    stray quarter — e.g. it reports Moderna at −$20M when the real annual burn is
+    ~−$2B), so the reported statement figure is the trustworthy source for runway.
+    Cached for 10 minutes. Returns {"free_cash_flow": float|None, "operating_cash_flow": float|None}.
+    """
+    ticker = normalize_ticker(ticker)
+    now = time.monotonic()
+    with _CASHFLOW_CACHE_LOCK:
+        entry = _CASHFLOW_CACHE.get(ticker)
+        if entry is not None:
+            val, ts = entry
+            if now - ts < _CASHFLOW_CACHE_TTL:
+                return val
+
+    result = {"free_cash_flow": None, "operating_cash_flow": None}
+    try:
+        cf = yf.Ticker(ticker).cashflow
+        if cf is not None and not cf.empty:
+            for key, dst in (("Free Cash Flow", "free_cash_flow"),
+                             ("Operating Cash Flow", "operating_cash_flow")):
+                if key in cf.index:
+                    vals = cf.loc[key].dropna()
+                    if len(vals):
+                        result[dst] = float(vals.iloc[0])
+    except Exception as exc:
+        logger.debug("get_annual_cashflow(%s): %s", ticker, exc)
+
+    with _CASHFLOW_CACHE_LOCK:
+        _CASHFLOW_CACHE[ticker] = (result, time.monotonic())
+    return result
+
+
 # ClinicalTrials.gov REST API v2
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
 _CT_FIELDS = (

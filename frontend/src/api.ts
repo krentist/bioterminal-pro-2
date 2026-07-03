@@ -2,7 +2,7 @@ import type {
   Quote, Bar, Fundamentals, Trial, NewsItem,
   ConfidenceData, DCFData, ScenariosData, SearchResult,
   RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
-  Filing, FlowEntry, DualListingData,
+  Filing, FlowEntry, DualListingData, CatalystsData,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -17,6 +17,7 @@ export const fetchStock        = (t: string, range: string) =>
   get<{ bars: Bar[] }>(`/api/stock/${enc(t)}?range=${range}`);
 export const fetchFundamentals = (t: string) => get<Fundamentals>(`/api/fundamentals/${enc(t)}`);
 export const fetchTrials       = (t: string) => get<{ trials: Trial[] }>(`/api/trials/${enc(t)}`);
+export const fetchCatalysts    = (t: string) => get<CatalystsData>(`/api/catalysts/${enc(t)}`);
 export const fetchNews         = (t: string) => get<NewsItem[]>(`/api/news/${enc(t)}`);
 export const fetchConfidence   = (t: string) => get<ConfidenceData>(`/api/confidence/${enc(t)}`);
 export const fetchDCF          = (t: string) => get<DCFData>(`/api/dcf/${enc(t)}`);

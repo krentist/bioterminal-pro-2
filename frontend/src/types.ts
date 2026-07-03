@@ -1,5 +1,5 @@
 export type AppTab =
-  | 'overview' | 'fundamentals' | 'pipeline' | 'rnpv' | 'dcf'
+  | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
   | 'screener'  | 'filings'     | 'ccas'     | 'duallisting'
   | 'news'      | 'watchlist';
@@ -37,6 +37,14 @@ export interface Fundamentals {
   description: string | null;
   name: string | null;
   sector: string | null;
+  // Cash runway (clinical-stage biotech's key survival metric)
+  cash?: number | null;
+  freeCashflow?: number | null;
+  operatingCashflow?: number | null;
+  annualBurn?: number | null;
+  runwayYears?: number | null;
+  cashGenerating?: boolean | null;
+  burnBasis?: 'freeCashflow' | 'operatingCashflow' | null;
 }
 
 export interface Trial {
@@ -300,6 +308,27 @@ export interface FlowEntry {
   shares: number | null;
   percentage: number | null;
   snapshot_date: string;
+}
+
+// ── Catalyst calendar ─────────────────────────────────────────────────────────
+
+export interface Catalyst {
+  nctId: string;
+  title: string;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  date: string | null;
+  daysAway: number | null;
+  sponsor: string | null;
+  isLeadSponsor: boolean;
+  probApproval: number | null;
+  source_url: string | null;
+}
+
+export interface CatalystsData {
+  catalysts: Catalyst[];
+  withinDays: number;
 }
 
 // ── Pipeline research (AI-powered) ───────────────────────────────────────────
