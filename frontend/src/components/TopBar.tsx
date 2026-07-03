@@ -1,4 +1,5 @@
-import { Sun, Moon } from 'lucide-react';
+import { useState } from 'react';
+import { Sun, Moon, Link2, Check } from 'lucide-react';
 import { fmt, fmtChange } from '@/lib/utils';
 import { TickerInput } from '@/components/TickerInput';
 import { WindowsMenu } from '@/components/WindowsMenu';
@@ -14,6 +15,16 @@ interface Props {
 
 export function TopBar({ ticker, quote, dark, onToggleDark, onSelectTicker }: Props) {
   const change = quote ? fmtChange(quote.changePercent) : null;
+  const [copied, setCopied] = useState(false);
+
+  function copyLink() {
+    const url = new URL(location.href);
+    if (ticker) url.searchParams.set('ticker', ticker);
+    navigator.clipboard?.writeText(url.toString()).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+      () => { /* clipboard blocked — ignore */ },
+    );
+  }
 
   return (
     <header className="flex-none flex items-center gap-3 px-4 h-11 border-b border-line bg-surface z-10">
@@ -53,6 +64,19 @@ export function TopBar({ ticker, quote, dark, onToggleDark, onSelectTicker }: Pr
       )}
 
       <div className="flex-1" />
+
+      {/* Share permalink */}
+      {ticker && (
+        <button
+          onClick={copyLink}
+          className={`flex items-center gap-1 p-1.5 rounded-md transition-colors ${
+            copied ? 'text-up' : 'text-dim hover:text-ink hover:bg-elevated'}`}
+          title={copied ? 'Link copied' : 'Copy shareable link to this ticker'}
+        >
+          {copied ? <Check size={14} /> : <Link2 size={14} />}
+          <span className="text-[10px] hidden sm:inline">{copied ? 'Copied' : 'Share'}</span>
+        </button>
+      )}
 
       <WindowsMenu />
 

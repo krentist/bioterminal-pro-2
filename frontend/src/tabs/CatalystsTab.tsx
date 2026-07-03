@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { fetchCatalysts } from '@/api';
 import { SkeletonList } from '@/components/Skeleton';
-import { fmtDate } from '@/lib/utils';
-import { CalendarClock, ExternalLink } from 'lucide-react';
+import { fmtDate, downloadCSV } from '@/lib/utils';
+import { CalendarClock, ExternalLink, Download } from 'lucide-react';
 import type { Catalyst } from '@/types';
 
 function phaseStyle(phase: string | null): string {
@@ -81,6 +81,17 @@ export function CatalystsTab({ ticker }: { ticker: string }) {
   if (error)   return <p className="text-sm text-dim">{error}</p>;
   if (!data)   return null;
 
+  function exportCSV() {
+    downloadCSV(
+      `${ticker}_catalysts.csv`,
+      ['NCT ID', 'Title', 'Phase', 'Status', 'Condition', 'Primary Completion', 'Days Away', 'Sponsor', 'Lead Sponsor'],
+      (data ?? []).map(c => [
+        c.nctId, c.title, c.phase, c.status, c.condition, c.date, c.daysAway, c.sponsor,
+        c.isLeadSponsor ? 'yes' : 'no',
+      ]),
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -90,6 +101,14 @@ export function CatalystsTab({ ticker }: { ticker: string }) {
             ? 'No upcoming interventional trial readouts in the next 18 months.'
             : `${data.length} upcoming readout${data.length !== 1 ? 's' : ''} — nearest first`}
         </p>
+        {data.length > 0 && (
+          <button
+            onClick={exportCSV}
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-[10px] border border-line rounded text-dim hover:text-hi hover:border-hi/50 transition-colors"
+          >
+            <Download size={11} /> Export CSV
+          </button>
+        )}
       </div>
 
       {data.length > 0 && (

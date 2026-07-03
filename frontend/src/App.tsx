@@ -167,6 +167,12 @@ function AppShell({ dark, onToggleDark }: { dark: boolean; onToggleDark: () => v
   const userSearched = useRef(false);
   const autoLoaded   = useRef(false);
 
+  // Shareable permalink: a ?ticker=… in the URL loads that ticker on arrival.
+  const initialTicker = useMemo(() => {
+    const t = new URLSearchParams(location.search).get('ticker');
+    return t ? t.toUpperCase() : null;
+  }, []);
+
   useEffect(() => {
     const mql = window.matchMedia('(min-width: 1024px)');
     const handle = () => setIsDesktopViewport(mql.matches);
@@ -184,16 +190,34 @@ function AppShell({ dark, onToggleDark }: { dark: boolean; onToggleDark: () => v
     }
   }, [wm]);
 
-  // Auto-demo: load BeiGene after 1.4 s if the user hasn't searched yet
+  // On arrival: honour a shared ?ticker= link; otherwise auto-demo BeiGene after 1.4s.
+  // The short delay lets persisted window state hydrate first so we don't clobber it.
   useEffect(() => {
+    const delay = initialTicker ? 200 : 1400;
     const t = setTimeout(() => {
-      if (!userSearched.current && !autoLoaded.current && wm.order.length === 0) {
+      if (autoLoaded.current) return;
+      if (!userSearched.current && wm.order.length === 0) {
         autoLoaded.current = true;
-        selectTicker('6160.HK');
+        selectTicker(initialTicker ?? '6160.HK');
+      } else if (initialTicker && wm.order.length > 0) {
+        // A session was restored — just point it at the shared ticker.
+        autoLoaded.current = true;
+        userSearched.current = true;
+        wm.setGlobalTicker(initialTicker);
       }
-    }, 1400);
+    }, delay);
     return () => clearTimeout(t);
-  }, [selectTicker, wm.order.length]);
+  }, [selectTicker, wm.order.length, initialTicker, wm]);
+
+  // Keep the URL's ?ticker= in sync so the address bar / Share button is a permalink.
+  useEffect(() => {
+    if (!wm.globalTicker) return;
+    const url = new URL(location.href);
+    if (url.searchParams.get('ticker') !== wm.globalTicker) {
+      url.searchParams.set('ticker', wm.globalTicker);
+      history.replaceState(null, '', url.toString());
+    }
+  }, [wm.globalTicker]);
 
   useEffect(() => {
     if (!wm.globalTicker) { setQuote(null); return; }

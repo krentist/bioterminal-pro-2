@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
+import { Download } from 'lucide-react';
 import { fetchPeers } from '@/api';
 import { SkeletonList } from '@/components/Skeleton';
-import { fmtBig, fmtMultiple, fmtPctFrac } from '@/lib/utils';
+import { fmtBig, fmtMultiple, fmtPctFrac, downloadCSV } from '@/lib/utils';
 import type { PeerRow } from '@/types';
 
 const CCY: Record<string, string> = { USD: '$', HKD: 'HK$', CNY: '¥', EUR: '€', GBP: '£' };
@@ -25,8 +26,27 @@ export function PeersTab({ ticker, onSelect }: { ticker: string; onSelect?: (t: 
   if (error)   return <p className="text-sm text-dim">{error}</p>;
   if (!rows || rows.length === 0) return <p className="text-sm text-dim">No peer data available.</p>;
 
+  function exportCSV() {
+    downloadCSV(
+      `${ticker}_peers.csv`,
+      ['Ticker', 'Name', 'Currency', 'Market Cap', 'Price', 'EV/Revenue', 'P/S', 'Revenue Growth', 'Gross Margin', 'Profit Margin', 'Cash', 'Target Upside'],
+      (rows ?? []).map(r => [
+        r.ticker, r.name, r.currency, r.marketCap, r.price, r.evToRevenue, r.psRatio,
+        r.revenueGrowth, r.grossMargin, r.profitMargin, r.cash, r.targetUpside,
+      ]),
+    );
+  }
+
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <button
+          onClick={exportCSV}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] border border-line rounded text-dim hover:text-hi hover:border-hi/50 transition-colors"
+        >
+          <Download size={11} /> Export CSV
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px] border-separate border-spacing-y-0">
           <thead>
