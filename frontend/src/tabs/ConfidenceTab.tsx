@@ -148,9 +148,16 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
         <div className="border border-line rounded bg-surface px-3 py-2.5 space-y-1.5">
           <div className="flex items-center justify-between">
             <p className="text-[10px] text-dim uppercase tracking-wider">News Sentiment</p>
-            {ni.ai_generated && (
-              <span className="text-[9px] text-dim bg-elevated border border-line px-1.5 py-0.5 rounded">AI</span>
-            )}
+            {ni.ai_generated ? (
+              <span className="text-[9px] text-hi bg-hi/10 border border-hi/30 px-1.5 py-0.5 rounded">AI</span>
+            ) : ni.ai_available === false ? (
+              <span
+                title="No LLM API key set on the server — headline sentiment is not analysed."
+                className="text-[9px] text-dim bg-elevated border border-line px-1.5 py-0.5 rounded"
+              >
+                AI off
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <span className="text-dim">{ni.recentCount} recent articles</span>

@@ -273,6 +273,28 @@ function ProgramRow({ prog }: { prog: PipelineProgram }) {
 // ── AI Research view ──────────────────────────────────────────────────────────
 
 function AIResearchView({ data }: { data: PipelineResearch }) {
+  // When the model didn't produce a result, say why plainly rather than showing an
+  // "AI assessment" of an error string followed by a misleading "No programs found".
+  if (!data.ai_generated) {
+    const notConfigured = data.ai_available === false;
+    return (
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Sparkles size={12} className="text-amber-400" />
+          <span className="text-[11px] font-semibold text-amber-300">
+            {notConfigured ? 'AI research not configured' : 'AI research unavailable'}
+          </span>
+        </div>
+        <p className="text-[11px] text-amber-200/90 leading-relaxed">{data.pipeline_summary}</p>
+        <p className="text-[10px] text-dim mt-2 leading-relaxed">
+          The ClinicalTrials.gov pipeline above is unaffected — switch back to the CT.gov view
+          for registered trials.
+          {notConfigured && ' AI research needs an LLM API key (Anthropic, Groq, OpenRouter, or Gemini) set on the server.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Summary */}

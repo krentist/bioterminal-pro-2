@@ -97,6 +97,7 @@ export interface ConfidenceData {
     interpretation?: string | null;
     keyEvents?: string[];
     ai_generated?: boolean;
+    ai_available?: boolean;
   } | null;
 }
 
@@ -371,6 +372,7 @@ export interface PipelineResearch {
   hk_china_angle:   string;
   data_note:        string;
   ai_generated:     boolean;
+  ai_available?:    boolean;
   ticker:           string;
   company_name:     string;
 }

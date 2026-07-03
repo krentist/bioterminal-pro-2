@@ -47,7 +47,7 @@ import devils_advocate as _devil
 import earnings_analyzer as _earnings
 from dual_listing import get_dual_listing_info
 from exchanges import get_exchange_adapter
-from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline
+from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline, _has_any_llm as _llm_has_any
 from model import predict as ml_predict
 from pipeline_analyzer import enrich_trials, upcoming_catalysts
 from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
@@ -661,6 +661,7 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
             "interpretation": llm_result.get("interpretation"),
             "keyEvents":      llm_result.get("key_events", []),
             "ai_generated":   llm_result.get("ai_generated", False),
+            "ai_available":   llm_result.get("ai_available", False),
         },
         "lastUpdated": datetime.utcnow().isoformat() + "Z",
     })
@@ -673,7 +674,8 @@ def _default_confidence() -> dict:
     ]
     return {
         "score": 50, "signal": "NEUTRAL", "factors": factors,
-        "newsImpact": {"keyEvent": None, "recentCount": 0, "sentimentScore": 0.0},
+        "newsImpact": {"keyEvent": None, "recentCount": 0, "sentimentScore": 0.0,
+                       "ai_generated": False, "ai_available": _llm_has_any()},
         "lastUpdated": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -1144,6 +1146,7 @@ def get_pipeline_summary(ticker: str):
             "key_risks": [],
             "upcoming_catalysts": [],
             "ai_generated": False,
+            "ai_available": _llm_has_any(),
         }
 
 
@@ -1258,6 +1261,7 @@ def get_pipeline_research(ticker: str):
             "hk_china_angle": "",
             "data_note": "",
             "ai_generated": False,
+            "ai_available": _llm_has_any(),
             "ticker": ticker,
         }
 
