@@ -21,7 +21,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Optional
 
@@ -169,7 +169,7 @@ def get_ownership(ticker: str) -> dict:
     date_si = info.get("dateShortInterest")
     if isinstance(date_si, (int, float)):
         try:
-            date_si = datetime.utcfromtimestamp(date_si).strftime("%Y-%m-%d")
+            date_si = datetime.fromtimestamp(date_si, tz=timezone.utc).strftime("%Y-%m-%d")
         except (ValueError, OverflowError, OSError):
             date_si = None
 

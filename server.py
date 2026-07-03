@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -179,6 +179,11 @@ def _currency_symbol(currency: str) -> str:
     return {"USD": "$", "HKD": "HK$", "CNY": "¥", "EUR": "€", "GBP": "£"}.get(currency, "$")
 
 
+def _utc_iso_z() -> str:
+    """Current UTC time as an ISO-8601 string ending in 'Z' (timezone-aware, non-deprecated)."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _load_watchlist() -> list[str]:
     try:
         return json.loads(WATCHLIST_PATH.read_text())
@@ -202,7 +207,7 @@ def _log_usage(ticker: str) -> None:
     """Append one usage record to usage_log.jsonl (thread-safe, best-effort)."""
     try:
         region = "HK" if ticker.upper().endswith(".HK") else "US"
-        entry  = json.dumps({"date": datetime.utcnow().strftime("%Y-%m-%d"), "ticker": ticker.upper(), "region": region})
+        entry  = json.dumps({"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "ticker": ticker.upper(), "region": region})
         with _usage_lock:
             with open(USAGE_LOG_PATH, "a") as f:
                 f.write(entry + "\n")
@@ -663,7 +668,7 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
             "ai_generated":   llm_result.get("ai_generated", False),
             "ai_available":   llm_result.get("ai_available", False),
         },
-        "lastUpdated": datetime.utcnow().isoformat() + "Z",
+        "lastUpdated": _utc_iso_z(),
     })
 
 
@@ -674,9 +679,11 @@ def _default_confidence() -> dict:
     ]
     return {
         "score": 50, "signal": "NEUTRAL", "factors": factors,
+        "mlSignal": {"signal": "NEUTRAL", "bullProb": 0.5, "confidence": 0.0,
+                     "trainedOn": 0, "oosAccuracy": None, "oosSamples": 0},
         "newsImpact": {"keyEvent": None, "recentCount": 0, "sentimentScore": 0.0,
                        "ai_generated": False, "ai_available": _llm_has_any()},
-        "lastUpdated": datetime.utcnow().isoformat() + "Z",
+        "lastUpdated": _utc_iso_z(),
     }
 
 
@@ -1492,7 +1499,7 @@ def get_screen(region: str = "HK"):
         payload = {
             "region":   region,
             "results":  results,
-            "cachedAt": datetime.utcnow().isoformat() + "Z",
+            "cachedAt": _utc_iso_z(),
         }
         _SCREEN_CACHE[region] = (payload, time.monotonic())
         return payload

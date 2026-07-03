@@ -17,7 +17,7 @@ import re
 import time
 from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -191,7 +191,7 @@ def _end_of_month_dates(months_back: int = 12) -> list[datetime]:
     be available yet, so we start from 2 months ago to avoid timeout-waiting
     for unpublished data.
     """
-    today = datetime.utcnow()
+    today = datetime.now(timezone.utc)
     start_offset = 2 if today.day <= 3 else 1
     dates = []
     for m in range(start_offset, months_back + start_offset):
@@ -227,7 +227,7 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 12) -> pd.DataFrame:
         "__EVENTARGUMENT": "",
         "__VIEWSTATE": "",
         "__VIEWSTATEGENERATOR": "A7B2BBE2",
-        "today": datetime.utcnow().strftime("%Y%m%d"),
+        "today": datetime.now(timezone.utc).strftime("%Y%m%d"),
         "sortBy": "shareholding",
         "sortDirection": "desc",
         "originalShareholdingDate": "",
