@@ -1,7 +1,7 @@
 export type AppTab =
   | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
-  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting'
+  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -330,6 +330,31 @@ export interface Catalyst {
 export interface CatalystsData {
   catalysts: Catalyst[];
   withinDays: number;
+}
+
+// ── Ownership & short interest ────────────────────────────────────────────────
+
+export interface InstitutionalHolder {
+  holder: string;
+  pctHeld: number | null;
+  shares: number | null;
+  value: number | null;
+  pctChange: number | null;
+  dateReported: string | null;
+}
+
+export interface OwnershipData {
+  heldPctInstitutions: number | null;
+  heldPctInsiders: number | null;
+  shortPctOfFloat: number | null;
+  sharesShort: number | null;
+  sharesShortPriorMonth: number | null;
+  shortInterestChangePct: number | null;
+  daysToCover: number | null;
+  dateShortInterest: string | null;
+  floatShares: number | null;
+  sharesOutstanding: number | null;
+  topInstitutions: InstitutionalHolder[];
 }
 
 // ── Pipeline research (AI-powered) ───────────────────────────────────────────

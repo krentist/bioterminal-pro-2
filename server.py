@@ -1375,6 +1375,19 @@ def get_sources(ticker: str):
 
 
 # ============================================================
+# /api/ownership/{ticker}  — institutional/insider ownership + short interest
+# ============================================================
+
+@app.get("/api/ownership/{ticker}")
+def get_ownership_route(ticker: str):
+    try:
+        return _to_json_safe(df_mod.get_ownership(ticker))
+    except Exception as exc:
+        logger.error("ownership(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
 # /api/backtest/{ticker}  — RSI+MACD strategy backtest
 # ============================================================
 

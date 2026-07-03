@@ -15,6 +15,7 @@ import { ScreenerTab }     from '@/tabs/ScreenerTab';
 import { FilingsTab }      from '@/tabs/FilingsTab';
 import { CCASFlowTab }     from '@/tabs/CCASFlowTab';
 import { DualListingTab }  from '@/tabs/DualListingTab';
+import { OwnershipTab }    from '@/tabs/OwnershipTab';
 import { NewsTab }         from '@/tabs/NewsTab';
 import { WatchlistTab }    from '@/tabs/WatchlistTab';
 
@@ -121,6 +122,12 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     defaultSize: { w: 480, h: 440 },
     render: ticker => <DualListingTab ticker={ticker} />,
   },
+  ownership: {
+    label: 'Ownership',
+    description: 'Institutional/insider ownership, short interest, and top 13F holders.',
+    defaultSize: { w: 560, h: 560 },
+    render: ticker => <OwnershipTab ticker={ticker} />,
+  },
   news: {
     label: 'News',
     description: 'Recent headlines with AI sentiment context.',
@@ -138,7 +145,7 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
 export const PANEL_ORDER: AppTab[] = [
   'overview', 'fundamentals', 'pipeline', 'catalysts', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
-  'filings', 'ccas', 'duallisting', 'screener', 'watchlist',
+  'filings', 'ccas', 'duallisting', 'ownership', 'screener', 'watchlist',
 ];
 
 export const DEFAULT_OPEN_PANELS: AppTab[] = ['overview', 'fundamentals', 'pipeline', 'news'];

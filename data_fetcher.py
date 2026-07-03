@@ -129,6 +129,85 @@ def get_annual_cashflow(ticker: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Ownership & short interest cache
+# ---------------------------------------------------------------------------
+
+_OWNERSHIP_CACHE: dict[str, tuple[dict, float]] = {}
+_OWNERSHIP_CACHE_LOCK = Lock()
+_OWNERSHIP_CACHE_TTL = 600  # 10 minutes
+
+
+def get_ownership(ticker: str) -> dict:
+    """Institutional/insider ownership, short interest, and top institutional holders.
+
+    Sourced from yfinance .info plus the institutional_holders table. Short-interest
+    fields are US-reported (None for most HK/other listings, which is handled by the
+    UI). Cached for 10 minutes.
+    """
+    ticker = normalize_ticker(ticker)
+    now = time.monotonic()
+    with _OWNERSHIP_CACHE_LOCK:
+        entry = _OWNERSHIP_CACHE.get(ticker)
+        if entry is not None:
+            val, ts = entry
+            if now - ts < _OWNERSHIP_CACHE_TTL:
+                return val
+
+    info = _cached_yf_info(ticker)
+
+    shares_short = info.get("sharesShort")
+    prior_short  = info.get("sharesShortPriorMonth")
+    si_change = None
+    try:
+        if shares_short and prior_short:
+            si_change = shares_short / prior_short - 1
+    except (TypeError, ZeroDivisionError):
+        si_change = None
+
+    date_si = info.get("dateShortInterest")
+    if isinstance(date_si, (int, float)):
+        try:
+            date_si = datetime.utcfromtimestamp(date_si).strftime("%Y-%m-%d")
+        except (ValueError, OverflowError, OSError):
+            date_si = None
+
+    top: list[dict] = []
+    try:
+        ih = yf.Ticker(ticker).institutional_holders
+        if ih is not None and not ih.empty:
+            for _, r in ih.head(10).iterrows():
+                dr = r.get("Date Reported")
+                top.append({
+                    "holder":       str(r.get("Holder", "")),
+                    "pctHeld":      float(r["pctHeld"])   if pd.notna(r.get("pctHeld"))   else None,
+                    "shares":       int(r["Shares"])      if pd.notna(r.get("Shares"))    else None,
+                    "value":        float(r["Value"])     if pd.notna(r.get("Value"))     else None,
+                    "pctChange":    float(r["pctChange"]) if pd.notna(r.get("pctChange")) else None,
+                    "dateReported": str(dr.date()) if hasattr(dr, "date") else (str(dr) if dr is not None else None),
+                })
+    except Exception as exc:
+        logger.debug("get_ownership holders(%s): %s", ticker, exc)
+
+    result = {
+        "heldPctInstitutions":    info.get("heldPercentInstitutions"),
+        "heldPctInsiders":        info.get("heldPercentInsiders"),
+        "shortPctOfFloat":        info.get("shortPercentOfFloat"),
+        "sharesShort":            shares_short,
+        "sharesShortPriorMonth":  prior_short,
+        "shortInterestChangePct": si_change,
+        "daysToCover":            info.get("shortRatio"),
+        "dateShortInterest":      date_si,
+        "floatShares":            info.get("floatShares"),
+        "sharesOutstanding":      info.get("sharesOutstanding"),
+        "topInstitutions":        top,
+    }
+
+    with _OWNERSHIP_CACHE_LOCK:
+        _OWNERSHIP_CACHE[ticker] = (result, time.monotonic())
+    return result
+
+
 # ClinicalTrials.gov REST API v2
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
 _CT_FIELDS = (

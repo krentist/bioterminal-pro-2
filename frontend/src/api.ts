@@ -2,7 +2,7 @@ import type {
   Quote, Bar, Fundamentals, Trial, NewsItem,
   ConfidenceData, DCFData, ScenariosData, SearchResult,
   RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
-  Filing, FlowEntry, DualListingData, CatalystsData,
+  Filing, FlowEntry, DualListingData, CatalystsData, OwnershipData,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -53,6 +53,7 @@ export const fetchScreen       = (region: 'HK' | 'US') =>
 export const fetchFilings      = (t: string) => get<Filing[]>(`/api/filings/${enc(t)}`);
 export const fetchFlow         = (t: string) => get<FlowEntry[]>(`/api/flow/${enc(t)}`);
 export const fetchDualListing  = (t: string) => get<DualListingData>(`/api/dual-listing/${enc(t)}`);
+export const fetchOwnership    = (t: string) => get<OwnershipData>(`/api/ownership/${enc(t)}`);
 export const fetchPipelineSummary = (t: string) =>
   get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(
     `/api/pipeline-summary/${enc(t)}`
