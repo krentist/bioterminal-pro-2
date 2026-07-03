@@ -1,7 +1,7 @@
 export type AppTab =
   | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
-  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership'
+  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership' | 'peers'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -355,6 +355,24 @@ export interface OwnershipData {
   floatShares: number | null;
   sharesOutstanding: number | null;
   topInstitutions: InstitutionalHolder[];
+}
+
+// ── Peer comparables ──────────────────────────────────────────────────────────
+
+export interface PeerRow {
+  ticker: string;
+  name: string;
+  marketCap: number | null;
+  price: number | null;
+  currency: string;
+  evToRevenue: number | null;
+  psRatio: number | null;
+  revenueGrowth: number | null;
+  grossMargin: number | null;
+  profitMargin: number | null;
+  cash: number | null;
+  targetUpside: number | null;
+  isSubject: boolean;
 }
 
 // ── Pipeline research (AI-powered) ───────────────────────────────────────────

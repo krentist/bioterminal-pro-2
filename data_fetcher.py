@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from threading import Lock
 from typing import Optional
@@ -665,33 +666,129 @@ def get_financials(ticker: str) -> dict[str, pd.DataFrame]:
         return {}
 
 
+# Curated peer sets. These are hand-picked comparable sets, not an exhaustive
+# screen — the UI is explicit that peers are a curated group.
+_SECTOR_PEERS: dict[str, list[str]] = {
+    "MRNA":  ["BNTX", "NVAX", "VRTX", "REGN", "GILD"],
+    "REGN":  ["VRTX", "BIIB", "ALNY", "IONS", "AMGN"],
+    "GILD":  ["ABBV", "BMY", "AMGN", "MRNA", "VRTX"],
+    "VRTX":  ["REGN", "BIIB", "ALNY", "IONS", "BMRN"],
+    "BIIB":  ["REGN", "VRTX", "IONS", "ALNY", "SAGE"],
+    "AMGN":  ["GILD", "ABBV", "BMY", "BIIB", "REGN"],
+    "0700.HK": ["9988.HK", "3690.HK", "1810.HK", "9999.HK", "0981.HK"],
+    "2269.HK": ["6160.HK", "1801.HK", "1177.HK", "1093.HK", "3692.HK"],
+    "6160.HK": ["2269.HK", "1801.HK", "1177.HK", "9688.HK", "9995.HK"],
+}
+
+_US_BIOTECH_PEERS = [
+    "MRNA", "BNTX", "REGN", "VRTX", "GILD", "AMGN", "BIIB",
+    "ALNY", "IONS", "INCY", "EXEL", "NBIX", "SRPT", "BMRN", "RARE",
+]
+_HK_BIOTECH_PEERS = [
+    "6160.HK", "2269.HK", "1801.HK", "3692.HK", "1093.HK",
+    "1177.HK", "9688.HK", "9995.HK", "6963.HK", "2196.HK",
+]
+
+
 def get_peers(ticker: str, n: int = 5) -> list[str]:
     """
-    Return a peer group for the given ticker.
+    Return a curated peer group for the given ticker.
 
-    Currently uses a hardcoded sector map as a lightweight starting point.
-    TODO: Replace with a proper peer-identification service (e.g. scrape
-    Finviz peer group or use a paid data vendor).
+    Explicit per-ticker overrides take precedence; otherwise falls back to the
+    region's biotech peer set (HK vs US), excluding the ticker itself. This is a
+    curated comparable set, not an exhaustive sector screen.
     """
-    _SECTOR_PEERS: dict[str, list[str]] = {
-        "MRNA":  ["BNTX", "NVAX", "CVAC", "ARCT", "RBGX"],
-        "REGN":  ["VRTX", "BIIB", "SGEN", "ALNY", "IONS"],
-        "GILD":  ["ABBV", "BMY", "AMGN", "MRNA", "VRTX"],
-        "VRTX":  ["REGN", "BIIB", "SGEN", "ALNY", "IONS"],
-        "BIIB":  ["REGN", "VRTX", "IONS", "ALNY", "SAGE"],
-        "AMGN":  ["GILD", "ABBV", "BMY", "BIIB", "REGN"],
-        "0700.HK": ["9988.HK", "3690.HK", "1177.HK", "2269.HK", "6160.HK"],
-        "2269.HK": ["6160.HK", "1801.HK", "1177.HK", "1093.HK", "3692.HK"],
-        "6160.HK": ["2269.HK", "1801.HK", "1177.HK", "1093.HK", "3692.HK"],
-    }
-    t = ticker.upper()
-    peers = _SECTOR_PEERS.get(t, [])
+    t = normalize_ticker(ticker).upper()
+    peers = list(_SECTOR_PEERS.get(t, []))
     if not peers:
-        # Generic biotech fallback
-        peers = ["MRNA", "REGN", "VRTX", "GILD", "AMGN"]
-        if t in peers:
-            peers = [p for p in peers if p != t][:n]
+        pool = _HK_BIOTECH_PEERS if t.endswith(".HK") else _US_BIOTECH_PEERS
+        peers = [p for p in pool if p.upper() != t]
+    peers = [p for p in peers if p.upper() != t]
     return peers[:n]
+
+
+# ---------------------------------------------------------------------------
+# Peer comparables table
+# ---------------------------------------------------------------------------
+
+_PEERS_CACHE: dict[str, tuple[list, float]] = {}
+_PEERS_CACHE_LOCK = Lock()
+_PEERS_CACHE_TTL = 600  # 10 minutes
+
+
+def _peer_row(ticker: str, is_subject: bool) -> Optional[dict]:
+    try:
+        info = _cached_yf_info(ticker)
+    except Exception:
+        return None
+    if not info:
+        return None
+    price  = info.get("regularMarketPrice") or info.get("currentPrice")
+    target = info.get("targetMeanPrice")
+    upside = None
+    try:
+        if target and price:
+            upside = target / price - 1
+    except (TypeError, ZeroDivisionError):
+        upside = None
+    return {
+        "ticker":        ticker.upper(),
+        "name":          info.get("shortName") or info.get("longName") or ticker,
+        "marketCap":     info.get("marketCap"),
+        "price":         price,
+        "currency":      info.get("currency", "USD"),
+        "evToRevenue":   info.get("enterpriseToRevenue"),
+        "psRatio":       info.get("priceToSalesTrailing12Months"),
+        "revenueGrowth": info.get("revenueGrowth"),
+        "grossMargin":   info.get("grossMargins"),
+        "profitMargin":  info.get("profitMargins"),
+        "cash":          info.get("totalCash"),
+        "targetUpside":  upside,
+        "isSubject":     is_subject,
+    }
+
+
+def get_peer_comps(ticker: str, n: int = 5) -> list[dict]:
+    """Comparable-metrics table for a ticker and its curated peers (subject first).
+
+    Uses only fast .info fields, fetched in parallel, cached 10 minutes.
+    """
+    subject = normalize_ticker(ticker).upper()
+    now = time.monotonic()
+    with _PEERS_CACHE_LOCK:
+        entry = _PEERS_CACHE.get(subject)
+        if entry is not None:
+            val, ts = entry
+            if now - ts < _PEERS_CACHE_TTL:
+                return val
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for x in [subject] + get_peers(subject, n):
+        u = x.upper()
+        if u not in seen:
+            seen.add(u)
+            ordered.append(x)
+
+    rows: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = {pool.submit(_peer_row, x, x.upper() == subject): x for x in ordered}
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+                if r:
+                    rows[r["ticker"]] = r
+            except Exception:
+                pass
+
+    # Subject first, then peers by descending market cap.
+    subject_row = rows.pop(subject, None)
+    peer_rows = sorted(rows.values(), key=lambda r: r.get("marketCap") or 0, reverse=True)
+    result = ([subject_row] if subject_row else []) + peer_rows
+
+    with _PEERS_CACHE_LOCK:
+        _PEERS_CACHE[subject] = (result, time.monotonic())
+    return result
 
 
 def get_stock_data(ticker: str, period: str = "1y") -> dict:

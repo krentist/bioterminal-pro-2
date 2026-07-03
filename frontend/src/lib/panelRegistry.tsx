@@ -16,6 +16,7 @@ import { FilingsTab }      from '@/tabs/FilingsTab';
 import { CCASFlowTab }     from '@/tabs/CCASFlowTab';
 import { DualListingTab }  from '@/tabs/DualListingTab';
 import { OwnershipTab }    from '@/tabs/OwnershipTab';
+import { PeersTab }        from '@/tabs/PeersTab';
 import { NewsTab }         from '@/tabs/NewsTab';
 import { WatchlistTab }    from '@/tabs/WatchlistTab';
 
@@ -128,6 +129,12 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     defaultSize: { w: 560, h: 560 },
     render: ticker => <OwnershipTab ticker={ticker} />,
   },
+  peers: {
+    label: 'Peer Comps',
+    description: 'Valuation and growth multiples vs. a curated peer set.',
+    defaultSize: { w: 640, h: 480 },
+    render: (ticker, h) => <PeersTab ticker={ticker} onSelect={h.openTicker} />,
+  },
   news: {
     label: 'News',
     description: 'Recent headlines with AI sentiment context.',
@@ -145,7 +152,7 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
 export const PANEL_ORDER: AppTab[] = [
   'overview', 'fundamentals', 'pipeline', 'catalysts', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
-  'filings', 'ccas', 'duallisting', 'ownership', 'screener', 'watchlist',
+  'filings', 'ccas', 'duallisting', 'ownership', 'peers', 'screener', 'watchlist',
 ];
 
 export const DEFAULT_OPEN_PANELS: AppTab[] = ['overview', 'fundamentals', 'pipeline', 'news'];

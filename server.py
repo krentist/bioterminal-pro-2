@@ -1388,6 +1388,19 @@ def get_ownership_route(ticker: str):
 
 
 # ============================================================
+# /api/peers/{ticker}  — curated peer comparables table
+# ============================================================
+
+@app.get("/api/peers/{ticker}")
+def get_peers_route(ticker: str):
+    try:
+        return _to_json_safe({"peers": df_mod.get_peer_comps(ticker, n=6)})
+    except Exception as exc:
+        logger.error("peers(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
 # /api/backtest/{ticker}  — RSI+MACD strategy backtest
 # ============================================================
 
