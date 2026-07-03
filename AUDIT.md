@@ -12,6 +12,46 @@ driving a verdict.
 
 ---
 
+## 0. Resolution status — Phases A–F (updated 2026-07-03)
+
+The findings below (§1–§8) are preserved as the **2026-07-02 pre-fix baseline**. Since then,
+Phases A–E were implemented, live-verified, and pushed to branch `phase-a-ship-ui-fixes`. Test
+count went **84 → 98**. This section maps each finding to the commit that resolved it; the
+original text is left unchanged for the record.
+
+| Finding | Status | Commit | Verification |
+|---|---|---|---|
+| **P0-1** rNPV: every trial a $500M drug, false positives | ✅ Fixed | `3cfd93e` (B) | Lead-sponsor filter + dedupe by phase/indication + explicit assumption note. `MRNA` 75 trials → lead-sponsor programs only; aspirin/NCI dropped. |
+| **P0-2** DCF fantasy numbers for pre-revenue biotech | ✅ Fixed | `3cfd93e` (B) | Loss-making/pre-revenue routed to rNPV; growth clamped ≤60%. `MRNA` no longer +385% (now rNPV); `GILD`/`AMGN` keep a sane DCF. |
+| **P0-3** ML signal unvalidated in-sample | ✅ Fixed | `3cfd93e` (B) | Walk-forward hold-out added; `oosAccuracy` surfaced (MRNA ~59% on 85 days) and framed honestly. |
+| **P0-4** Backtest reports alpha with 0 trades | ✅ Fixed | `3cfd93e` (B) | Alpha nulled when `n_trades==0`; in-sample disclaimer note shown. |
+| **P0-5** Dual-listing states false BeiGene delisting | ✅ Fixed | `ccd1cf7` (C) | Corrected to active NASDAQ:ONC (BGNE→ONC 2025-01-02, ADS 13:1), verified against SEC filings. |
+| **P1-1** Watchlist "add" 405 | ✅ Fixed | `004a076` (A) | `POST /api/watchlist/{ticker}` added; returns 200. |
+| **P1-2** Chart range selector inert | ✅ Fixed | `004a076` (A) | UI labels mapped to periods; `period_to_dates` gained `1d`/`5d`. 1D→intraday, 5Y→weekly verified. |
+| **P1-3** LLM features silently dark | ✅ Fixed (code) | `35a9571` (E) | `ai_available` flag + honest "not configured" UI. *Operational:* deploy still needs an LLM key set. |
+| **P2-1** No cash/burn/**runway** | ✅ Fixed | `a1a8c62` (D) | Runway card in Fundamentals; burn from cash-flow statement (MRNA 2.5y, CRBU 1.05y). |
+| **P2-2** No catalyst calendar | ✅ Fixed | `a1a8c62` (D) | New Catalysts tab + `/api/catalysts`, interventional-only, lead/collab tagged. |
+| **P2-4** Bare HK code returns US data | ✅ Fixed | `ccd1cf7` (C) | `normalize_ticker` in the data primitives; `/api/quote/700` → HKD. |
+| **P3** Filings `type` dirty (HTML entities, run-on) | ✅ Fixed | `ccd1cf7` (C) | Entities decoded, "…More" tail stripped, length-capped. |
+| **P3** Non-biotech "trials" no signal | ◑ Partial | `ccd1cf7` (C) | Per-trial `isLeadSponsor` + "collaborator" tag + count; no explicit "not a biotech" verdict yet. |
+| Exec-verdict #4 · stale served UI | ✅ Fixed | `004a076` (A) | Fresh build shipped; served bundle has window manager / pop-out / Quote Monitor. |
+| **Phase F** trust-focused tests | ✅ Done | B–E | `test_backtester`, `test_analytics_trust`, `test_runway`, `test_llm_availability` (14 new tests). |
+
+**Still open (not yet addressed):**
+
+- **P1-4** US institutional flow (13F) is still an empty stub.
+- **P2-3 / P2-5** Trial depth (endpoints, comparators, enroll-vs-plan), short interest, insider &
+  13F ownership, dilution/ATM/shelf history, patent/exclusivity cliffs, peer-comps table, and
+  export/share (CSV/PDF/permalink) remain absent.
+- **P3** CCASS ~38s cold load (still spinner-only); Scenarios base-case can read below spot from a
+  stale analyst target; invalid ticker returns 200 with null price.
+- **P4** `app.py`/`streamlit` dead weight, `datetime.utcnow()` deprecation, `get_peers` stub, and
+  `_default_confidence` still omitting `mlSignal` from its shape.
+- **Engine caveats** (not defects): alpha-screener dimension names oversell; Monte Carlo is a
+  zero-drift volatility fan, not labeled as such.
+
+---
+
 ## 1. Executive verdict
 
 **Would the target user adopt this today? No — not yet.** The plumbing is genuinely good:
