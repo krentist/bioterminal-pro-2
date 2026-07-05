@@ -190,6 +190,23 @@ def get_ownership(ticker: str) -> dict:
     except Exception as exc:
         logger.debug("get_ownership holders(%s): %s", ticker, exc)
 
+    insider_txns: list[dict] = []
+    try:
+        it = yf.Ticker(ticker).insider_transactions
+        if it is not None and not it.empty:
+            for _, r in it.head(15).iterrows():
+                d = r.get("Start Date")
+                insider_txns.append({
+                    "date":        str(d.date()) if hasattr(d, "date") else (str(d) if d is not None else None),
+                    "insider":     str(r.get("Insider", "")) or None,
+                    "position":    str(r.get("Position", "")) or None,
+                    "transaction": str(r.get("Transaction", "")) or None,
+                    "shares":      int(r["Shares"]) if pd.notna(r.get("Shares")) else None,
+                    "value":       float(r["Value"]) if pd.notna(r.get("Value")) else None,
+                })
+    except Exception as exc:
+        logger.debug("get_ownership insider(%s): %s", ticker, exc)
+
     result = {
         "heldPctInstitutions":    info.get("heldPercentInstitutions"),
         "heldPctInsiders":        info.get("heldPercentInsiders"),
@@ -202,6 +219,7 @@ def get_ownership(ticker: str) -> dict:
         "floatShares":            info.get("floatShares"),
         "sharesOutstanding":      info.get("sharesOutstanding"),
         "topInstitutions":        top,
+        "insiderTransactions":    insider_txns,
     }
 
     with _OWNERSHIP_CACHE_LOCK:
@@ -213,8 +231,13 @@ def get_ownership(ticker: str) -> dict:
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
 _CT_FIELDS = (
     "NCTId,BriefTitle,OverallStatus,Phase,Condition,"
-    "LeadSponsorName,StartDate,PrimaryCompletionDate,EnrollmentCount"
+    "LeadSponsorName,StartDate,PrimaryCompletionDate,EnrollmentCount,"
+    "EnrollmentType,PrimaryOutcomeMeasure,InterventionName,InterventionType,"
+    "ArmGroupLabel,ArmGroupType,DesignPrimaryPurpose"
 )
+
+# Arm-group types that denote a control/comparator arm (vs. an experimental arm).
+_COMPARATOR_ARM_TYPES = {"ACTIVE_COMPARATOR", "PLACEBO_COMPARATOR", "SHAM_COMPARATOR", "NO_INTERVENTION"}
 
 # yfinance info keys we care about for the metadata dict
 _META_KEYS = [
@@ -505,9 +528,21 @@ def _ct_search_raw(term: str, field: str, page_size: int) -> list[dict]:
         design   = ps.get("designModule", {})
         cond_mod = ps.get("conditionsModule", {})
         spon_mod = ps.get("sponsorCollaboratorsModule", {})
+        arms_mod = ps.get("armsInterventionsModule", {})
+        out_mod  = ps.get("outcomesModule", {})
 
         phases    = design.get("phases", [])
         phase_str = ", ".join(p.replace("PHASE", "Phase ") for p in phases) if phases else "N/A"
+
+        enroll_info = design.get("enrollmentInfo", {})
+        interventions = [i.get("name") for i in arms_mod.get("interventions", []) if i.get("name")]
+        comparator_arms = [
+            a.get("label") for a in arms_mod.get("armGroups", [])
+            if str(a.get("type", "")).upper() in _COMPARATOR_ARM_TYPES and a.get("label")
+        ]
+        primary_endpoints = [
+            o.get("measure") for o in out_mod.get("primaryOutcomes", []) if o.get("measure")
+        ]
 
         rows.append({
             "nct_id":                  id_mod.get("nctId"),
@@ -517,8 +552,13 @@ def _ct_search_raw(term: str, field: str, page_size: int) -> list[dict]:
             "condition":               ", ".join(cond_mod.get("conditions", [])),
             "start_date":              _ct_date(stat_mod.get("startDateStruct")),
             "primary_completion_date": _ct_date(stat_mod.get("primaryCompletionDateStruct")),
-            "enrollment":              design.get("enrollmentInfo", {}).get("count"),
+            "enrollment":              enroll_info.get("count"),
+            "enrollment_type":         enroll_info.get("type"),        # ACTUAL vs ESTIMATED
             "sponsor":                 spon_mod.get("leadSponsor", {}).get("name"),
+            "primary_endpoint":        "; ".join(primary_endpoints[:2]) or None,
+            "interventions":           ", ".join(interventions[:6]) or None,
+            "comparator":              ", ".join(comparator_arms[:4]) or None,
+            "primary_purpose":         design.get("designInfo", {}).get("primaryPurpose"),
         })
     return rows
 
@@ -539,9 +579,18 @@ def _empty_trials_df() -> pd.DataFrame:
     return pd.DataFrame(
         columns=[
             "nct_id", "title", "phase", "status", "condition",
-            "start_date", "primary_completion_date", "enrollment", "sponsor",
+            "start_date", "primary_completion_date", "enrollment", "enrollment_type",
+            "sponsor", "primary_endpoint", "interventions", "comparator", "primary_purpose",
         ]
     )
+
+
+def fetch_clinicaltrials_by_condition(condition: str, page_size: int = 60) -> pd.DataFrame:
+    """Search interventional trials by indication/condition (for competitive landscape)."""
+    if not (condition or "").strip():
+        return _empty_trials_df()
+    rows = _ct_search_raw(condition.strip(), "query.cond", page_size)
+    return pd.DataFrame(rows) if rows else _empty_trials_df()
 
 
 # ============================================================

@@ -497,11 +497,17 @@ def get_trials(ticker: str):
                 "status":   row.get("status"),
                 "condition":row.get("condition"),
                 "enrollment": _safe(row.get("enrollment")),
+                "enrollmentType": row.get("enrollment_type"),
                 "startDate":  row.get("start_date"),
                 "primaryCompletionDate": row.get("primary_completion_date"),
                 "sponsor":  sponsor,
                 "isLeadSponsor": is_lead,
                 "probApproval": _safe(float(row.get("prob_approval", 0))),
+                "primaryEndpoint": row.get("primary_endpoint"),
+                "interventions":   row.get("interventions"),
+                "comparator":      row.get("comparator"),
+                "hasComparator":   bool(row.get("comparator")),
+                "primaryPurpose":  row.get("primary_purpose"),
                 "registry": "ClinicalTrials.gov",
                 "source_url": f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
             })
@@ -1662,6 +1668,133 @@ def get_earnings(ticker: str):
         })
     except Exception as exc:
         logger.error("earnings(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/competition/{ticker}  — competitive landscape per indication (Phase L / §2)
+# ============================================================
+
+_COMPETITION_CACHE: dict[str, tuple[dict, float]] = {}
+_COMPETITION_CACHE_TTL = 1800
+_PHASE_RANK = {
+    "Phase 1": 1, "Phase 1/2": 2, "Phase 2": 3, "Phase 2/3": 4,
+    "Phase 3": 5, "Phase 4": 4, "NDA/BLA": 6, "Approved": 7,
+}
+
+# ClinicalTrials.gov by-condition search returns many academic / government / investigator-
+# sponsored studies. A *competitive* landscape is about commercial rivals, so filter those out.
+_ACADEMIC_GOV_RE = re.compile(
+    r"(universit|\buniv\b|hospital|\bcollege\b|institute|institut|foundation|fondazione|"
+    r"fundaci|funda[cç][aã]o|ministry|\bnhs\b|national institut|medical cent|cancer cent|"
+    r"health (authority|service|system)|\bclinic\b|\bclinica\b|klinik|academy|"
+    r"assistance publique|\bcnrs\b|\bnci\b|\bnih\b|veterans|research cent|"
+    r"cooperative|consortium|\btrust\b|\bm\.?d\.?\b|\bph\.?d\.?\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_industry_sponsor(name: str) -> bool:
+    """Heuristic: keep commercial sponsors, drop academic/government/individual ones."""
+    n = (name or "").strip()
+    if not n:
+        return False
+    if _ACADEMIC_GOV_RE.search(n):
+        return False
+    if n == n.lower():           # investigator names are often entered all-lowercase
+        return False
+    return True
+
+
+@app.get("/api/competition/{ticker}")
+def get_competition(ticker: str):
+    """Who else is in this race: other sponsors running interventional trials in this
+    company's lead indication, most-advanced program per rival sponsor."""
+    key = ticker.upper()
+    now = time.monotonic()
+    cached, ts = _COMPETITION_CACHE.get(key, (None, 0.0))
+    if cached is not None and now - ts < _COMPETITION_CACHE_TTL:
+        return cached
+    try:
+        raw = fetch_clinicaltrials(ticker)
+        if raw.empty:
+            return {"indication": None, "leadPhase": None, "competitors": [],
+                    "note": "No pipeline found for this ticker."}
+        enriched = enrich_trials(raw)
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            company = ticker
+        terms = _sponsor_match_terms(ticker, company)
+
+        sponsor_l = enriched["sponsor"].fillna("").str.lower()
+        own_mask = sponsor_l.apply(lambda s: any(t in s for t in terms)) if terms else pd.Series(False, index=enriched.index)
+        own = enriched[own_mask] if own_mask.any() else enriched
+        own = own.copy()
+        own["_rank"] = own["phase_clean"].map(_PHASE_RANK).fillna(0)
+        sort_cols = [c for c in ("_rank", "is_active") if c in own.columns]
+        own = own.sort_values(sort_cols, ascending=False)
+        lead = own.iloc[0]
+        indication = str(lead.get("condition") or "").split(",")[0].strip()
+        lead_phase = lead.get("phase_clean")
+        if not indication:
+            return {"indication": None, "leadPhase": lead_phase, "competitors": [],
+                    "note": "Lead indication could not be determined from the pipeline."}
+
+        rivals_raw = df_mod.fetch_clinicaltrials_by_condition(indication)
+        competitors: list[dict] = []
+        seen: set[str] = set()
+        if not rivals_raw.empty:
+            renr = enrich_trials(rivals_raw)
+            renr = renr.copy()
+            renr["_rank"] = renr["phase_clean"].map(_PHASE_RANK).fillna(0)
+            renr = renr.sort_values("_rank", ascending=False)
+            for _, row in renr.iterrows():
+                sponsor = str(row.get("sponsor") or "")
+                if not sponsor or row.get("phase_clean") == "Other":
+                    continue
+                if not _is_industry_sponsor(sponsor):   # commercial rivals only
+                    continue
+                sl = sponsor.lower()
+                if any(t in sl for t in terms):   # exclude our own trials
+                    continue
+                if sl in seen:                    # one (most-advanced) row per rival sponsor
+                    continue
+                seen.add(sl)
+                nct = row.get("nct_id")
+                competitors.append({
+                    "sponsor":   sponsor,
+                    "nctId":     nct,
+                    "title":     row.get("title"),
+                    "phase":     row.get("phase_clean") or row.get("phase"),
+                    "status":    row.get("status"),
+                    "condition": row.get("condition"),
+                    "probApproval": _safe(float(row.get("prob_approval", 0))),
+                    "source_url": f"https://clinicaltrials.gov/study/{nct}" if nct else None,
+                })
+        competitors.sort(key=lambda c: _PHASE_RANK.get(c["phase"], 0), reverse=True)
+        payload = _to_json_safe({
+            "indication":     indication,
+            "leadPhase":      lead_phase,
+            "leadProgram":    {"title": lead.get("title"), "nctId": lead.get("nct_id")},
+            "competitorCount": len(competitors),
+            "competitors":    competitors[:40],
+            "note": "Commercial sponsors in the same indication (academic, government, and "
+                    "investigator-sponsored studies are filtered out); most-advanced program "
+                    "per sponsor.",
+            "source":         "ClinicalTrials.gov",
+            "source_url": (
+                f"https://clinicaltrials.gov/search?cond={_url_quote(indication)}"
+                "&aggFilters=studyType:int"
+            ),
+        })
+        _COMPETITION_CACHE[key] = (payload, time.monotonic())
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("competition(%s): %s", ticker, exc)
         raise HTTPException(status_code=502, detail=str(exc))
 
 
