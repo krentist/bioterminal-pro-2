@@ -38,6 +38,26 @@ ADS_RATIO: dict[str, float] = {
 DELISTED_ADS: dict[str, dict] = {}
 
 _USDHKD_TICKER = "USDHKD=X"
+_USDCNY_TICKER = "USDCNY=X"
+
+# A/H/US cross-border groups — each company's share classes across exchanges.
+# Every leg below was verified to resolve to the same entity on yfinance.
+# `ads_ratio` = ordinary shares per US ADS (only where a US ADS leg exists).
+CROSS_BORDER_GROUPS: list[dict] = [
+    {"name": "BeOne Medicines (BeiGene)",          "hk": "6160.HK", "us": "ONC", "cn": "688235.SS", "ads_ratio": 13.0},
+    {"name": "Shanghai Junshi Biosciences",        "hk": "1877.HK", "cn": "688180.SS"},
+    {"name": "CanSino Biologics",                  "hk": "6185.HK", "cn": "688185.SS"},
+    {"name": "WuXi AppTec",                        "hk": "2359.HK", "cn": "603259.SS"},
+    {"name": "Shanghai Fosun Pharmaceutical",      "hk": "2196.HK", "cn": "600196.SS"},
+    {"name": "Jiangsu Hengrui Pharmaceuticals",    "hk": "1276.HK", "cn": "600276.SS"},
+]
+
+# ticker (upper) → its group, for O(1) lookup from any leg
+_CROSS_BORDER_INDEX: dict[str, dict] = {}
+for _g in CROSS_BORDER_GROUPS:
+    for _leg in ("hk", "us", "cn"):
+        if _g.get(_leg):
+            _CROSS_BORDER_INDEX[_g[_leg].upper()] = _g
 
 
 def _fetch_price(ticker: str) -> float | None:
@@ -63,6 +83,17 @@ def _usdhkd_rate() -> float:
     except Exception:
         pass
     return 7.78  # fallback: typical HKD/USD peg rate
+
+
+def _usdcny_rate() -> float:
+    try:
+        info = yf.Ticker(_USDCNY_TICKER).info or {}
+        rate = info.get("regularMarketPrice") or info.get("currentPrice")
+        if rate:
+            return float(rate)
+    except Exception:
+        pass
+    return 7.15  # fallback: typical USD/CNY rate
 
 
 def get_dual_listing_info(ticker: str) -> dict | None:
@@ -121,4 +152,73 @@ def get_dual_listing_info(ticker: str) -> dict | None:
         "usdhkd_rate":          round(rate, 4),
         "ads_ratio":            ads_ratio,
         "status":               "active",
+    }
+
+
+def get_cross_border_info(ticker: str) -> dict | None:
+    """Full A/H/US cross-listing view for a company: every share class it lists across
+    Shanghai/Shenzhen (CN), Hong Kong (HK), and the US, each priced on a common
+    per-ordinary-share USD basis with a premium/discount vs. the reference leg.
+
+    Returns None if the ticker is not in a known cross-border group.
+    """
+    t = ticker.strip().upper()
+    group = _CROSS_BORDER_INDEX.get(t)
+    if not group:
+        return None
+
+    usdhkd = _usdhkd_rate()
+    usdcny = _usdcny_rate()
+    ads_ratio = float(group.get("ads_ratio", 1.0))
+
+    def _per_share_usd(exch: str, price: float | None) -> float | None:
+        if not price:
+            return None
+        if exch == "HK":
+            return price / usdhkd
+        if exch == "CN":
+            return price / usdcny
+        if exch == "US":                      # ADS → per ordinary share
+            return price / ads_ratio
+        return None
+
+    legs: list[dict] = []
+    for exch, key, currency in (("CN", "cn", "CNY"), ("HK", "hk", "HKD"), ("US", "us", "USD")):
+        tk = group.get(key)
+        if not tk:
+            continue
+        price = _fetch_price(tk)
+        leg = {
+            "exchange":        exch,
+            "ticker":          tk.upper(),
+            "currency":        currency,
+            "priceLocal":      round(price, 4) if price else None,
+            "pricePerShareUsd": None,
+            "premiumVsRefPct": None,
+        }
+        if exch == "US":
+            leg["adsRatio"] = ads_ratio
+        psu = _per_share_usd(exch, price)
+        leg["pricePerShareUsd"] = round(psu, 4) if psu else None
+        legs.append(leg)
+
+    # Reference = HK leg if present (the GBA anchor), else the first leg with a USD price.
+    ref = next((l for l in legs if l["exchange"] == "HK" and l["pricePerShareUsd"]), None)
+    if ref is None:
+        ref = next((l for l in legs if l["pricePerShareUsd"]), None)
+    if ref is not None:
+        ref_usd = ref["pricePerShareUsd"]
+        for l in legs:
+            if l["pricePerShareUsd"] and ref_usd:
+                l["premiumVsRefPct"] = round((l["pricePerShareUsd"] / ref_usd - 1) * 100, 2)
+
+    return {
+        "ticker":            t,
+        "cross_border":      True,
+        "name":              group["name"],
+        "referenceExchange": ref["exchange"] if ref else None,
+        "usdhkd_rate":       round(usdhkd, 4),
+        "usdcny_rate":       round(usdcny, 4),
+        "legs":              legs,
+        "listedExchanges":   [l["exchange"] for l in legs],
     }

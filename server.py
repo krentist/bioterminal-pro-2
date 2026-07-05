@@ -45,7 +45,7 @@ import alpha_screener as _screener
 import backtester as _backtester
 import devils_advocate as _devil
 import earnings_analyzer as _earnings
-from dual_listing import get_dual_listing_info
+from dual_listing import get_dual_listing_info, get_cross_border_info
 from exchanges import get_exchange_adapter
 from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline, _has_any_llm as _llm_has_any
 from model import predict as ml_predict
@@ -1200,6 +1200,55 @@ def get_dual_listing(ticker: str):
 
 
 # ============================================================
+# /api/cross-border/{ticker}  — A/H/US share-class view (Phase M / §3)
+# ============================================================
+
+@app.get("/api/cross-border/{ticker}")
+def get_cross_border(ticker: str):
+    """One asset across CN/HK/US: each share class priced per-ordinary-share in USD with a
+    premium/discount vs the reference leg. Returns cross_border=False if not a known group."""
+    try:
+        result = get_cross_border_info(ticker)
+        if result is None:
+            return {"cross_border": False, "ticker": ticker.upper()}
+        return _to_json_safe(result)
+    except Exception as exc:
+        logger.error("cross_border(%s): %s", ticker, exc)
+        return {"cross_border": False, "ticker": ticker.upper()}
+
+
+# ============================================================
+# /api/nmpa/{ticker}  — NMPA drug-approval status (honest deep-link, Phase M / §3)
+# ============================================================
+
+@app.get("/api/nmpa/{ticker}")
+def get_nmpa(ticker: str):
+    """NMPA approval status. There is no free, machine-readable NMPA approval feed, so this
+    returns an honest 'not available' state with official deep-links for manual verification
+    rather than fabricating regulatory data."""
+    try:
+        info = df_mod._cached_yf_info(ticker)
+        name = (info.get("longName") or info.get("shortName") or ticker).strip()
+    except Exception:
+        name = ticker
+    name_q = _url_quote(name)
+    return {
+        "ticker":  ticker.upper(),
+        "company": name,
+        "status":  "not_available",
+        "message": (
+            "NMPA drug-approval status is not published as a free, machine-readable feed. "
+            "Verify approvals and registered trials by company name via the official portals below."
+        ),
+        "nmpaQueryUrl": "https://www.nmpa.gov.cn/datasearch/home-index.html",
+        "cdeTrialsUrl": "http://www.chinadrugtrials.org.cn/clinicaltrialsearch.dhtml",
+        "whoIctrpUrl":  f"https://trialsearch.who.int/AdvSearch.aspx?SearchTerms={name_q}",
+        "source":       "NMPA / CDE (manual verification)",
+        "ai_generated": False,
+    }
+
+
+# ============================================================
 # /api/pipeline-summary/{ticker}  — LLM pipeline risk summarisation
 # ============================================================
 
@@ -1431,6 +1480,8 @@ def get_sources(ticker: str):
         ),
     }
 
+    is_cn = ticker.upper().endswith((".SS", ".SZ"))
+
     if is_hk:
         raw_code = ticker.upper().replace(".HK", "").lstrip("0") or "0"
         hk_code  = f"{int(raw_code):04d}"
@@ -1439,6 +1490,14 @@ def get_sources(ticker: str):
         )
         sources["nmpa_url"]  = "https://www.nmpa.gov.cn/"
         sources["ctctr_url"] = "http://www.chinadrugtrials.org.cn/index.html"
+        sources["yicai_url"] = f"https://www.yicai.com/search/?keywords={name_q}"
+    elif is_cn:
+        exch = "sse" if ticker.upper().endswith(".SS") else "szse"
+        sources["nmpa_query_url"] = "https://www.nmpa.gov.cn/datasearch/home-index.html"
+        sources["cde_trials_url"] = "http://www.chinadrugtrials.org.cn/clinicaltrialsearch.dhtml"
+        sources["exchange_url"] = (
+            "https://www.sse.com.cn/" if exch == "sse" else "https://www.szse.cn/"
+        )
         sources["yicai_url"] = f"https://www.yicai.com/search/?keywords={name_q}"
     else:
         ticker_q = _url_quote(ticker.upper())
