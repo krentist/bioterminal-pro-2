@@ -53,6 +53,7 @@ from pipeline_analyzer import enrich_trials, upcoming_catalysts
 from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
 from utils import period_to_dates
 import compliance as _compliance
+import entities as _entities
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -72,17 +73,21 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ---------------------------------------------------------------------------
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
-# Matches /api/<endpoint>/<ticker> (with optional /port/5000 prefix)
-_TICKER_PATH_RE = re.compile(r"^(?:/port/5000)?/api/[^/]+/([^/?]+)")
+# Matches /api/<endpoint>/<param> (with optional /port/5000 prefix)
+_TICKER_PATH_RE = re.compile(r"^(?:/port/5000)?/api/([^/]+)/([^/?]+)")
 
 _PUBLIC_API_PATHS = {"/api/docs", "/api/openapi.json", "/api/redoc"}
+
+# Endpoints whose first path segment is NOT a ticker (e.g. a company id or sub-resource),
+# so the ticker-format check must not apply to them.
+_NON_TICKER_ENDPOINTS = {"company", "notes", "compliance"}
 
 
 class _ValidateTickerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         m = _TICKER_PATH_RE.match(request.url.path)
-        if m and not request.url.path.rstrip("/").endswith(("/api/docs", "/api/redoc")):
-            if not _TICKER_RE.match(m.group(1).upper()):
+        if m and m.group(1).lower() not in _NON_TICKER_ENDPOINTS:
+            if not _TICKER_RE.match(m.group(2).upper()):
                 return JSONResponse(status_code=400, content={"detail": "Invalid ticker symbol"})
         return await call_next(request)
 
@@ -1706,6 +1711,82 @@ def lift_restricted(ticker: str, note: str = ""):
 @app.get("/api/compliance/audit")
 def get_compliance_audit():
     return {"audit": _compliance.list_audit()}
+
+
+# ============================================================
+# Private company entity model (Phase K / §1)
+#   /api/company              — create / list private (pre-IPO) companies
+#   /api/company/{id}         — full view: pipeline + rNPV + comps + notes
+#   /api/company/{id}/funding — attach a funding round (private-market comp)
+#   /api/company/{id}/notes   — attach a diligence note (data-room)
+# No price / DCF / backtest / scenarios — meaningless without a traded security.
+# ============================================================
+
+@app.post("/api/company")
+def create_company_route(body: dict):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        return _entities.create_company(
+            name,
+            listing_status=(body.get("listingStatus") or "private"),
+            ct_sponsor_name=body.get("ctSponsorName"),
+            linked_ticker=body.get("linkedTicker"),
+            description=body.get("description") or "",
+            aliases=body.get("aliases"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/company")
+def list_companies_route(q: Optional[str] = None):
+    return {"companies": _entities.list_companies(q)}
+
+
+@app.get("/api/company/{company_id}")
+def get_company_route(company_id: str):
+    try:
+        view = _entities.company_view(company_id)
+    except Exception as exc:
+        logger.error("company_view(%s): %s", company_id, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    if view is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return _to_json_safe(view)
+
+
+@app.post("/api/company/{company_id}/funding")
+def add_funding_route(company_id: str, body: dict):
+    r = _entities.add_funding_round(
+        company_id,
+        date=body.get("date"),
+        round_type=body.get("roundType"),
+        amount_usd=body.get("amountUsd"),
+        post_money_usd=body.get("postMoneyUsd"),
+        lead_investor=body.get("leadInvestor"),
+        source=body.get("source"),
+        source_url=body.get("sourceUrl"),
+    )
+    if r is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return r
+
+
+@app.post("/api/company/{company_id}/notes")
+def add_company_note_route(company_id: str, body: dict):
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    note = _entities.attach_note(
+        company_id, text,
+        source=(body.get("source") or "").strip(),
+        is_material_nonpublic=bool(body.get("isMaterialNonpublic")),
+    )
+    if note is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return note
 
 
 # ============================================================

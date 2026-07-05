@@ -16,6 +16,11 @@ compliance.db
 compliance.db-wal
 compliance.db-shm
 
+# Private company entity store (user data — never commit)
+entities.db
+entities.db-wal
+entities.db-shm
+
 # Old UI backup (keep locally, not in repo)
 assets-old/
 index-old.html
