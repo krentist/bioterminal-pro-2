@@ -3,6 +3,7 @@ import type {
   ConfidenceData, DCFData, ScenariosData, SearchResult,
   RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
   Filing, FlowEntry, DualListingData, CatalystsData, OwnershipData, PeerRow,
+  CompetitionData, CrossBorderData,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -54,6 +55,8 @@ export const fetchFilings      = (t: string) => get<Filing[]>(`/api/filings/${en
 export const fetchFlow         = (t: string) => get<FlowEntry[]>(`/api/flow/${enc(t)}`);
 export const fetchDualListing  = (t: string) => get<DualListingData>(`/api/dual-listing/${enc(t)}`);
 export const fetchOwnership    = (t: string) => get<OwnershipData>(`/api/ownership/${enc(t)}`);
+export const fetchCompetition  = (t: string) => get<CompetitionData>(`/api/competition/${enc(t)}`);
+export const fetchCrossBorder  = (t: string) => get<CrossBorderData>(`/api/cross-border/${enc(t)}`);
 export const fetchPeers        = (t: string) => get<{ peers: PeerRow[] }>(`/api/peers/${enc(t)}`);
 export const fetchPipelineSummary = (t: string) =>
   get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(

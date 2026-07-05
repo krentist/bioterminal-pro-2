@@ -17,9 +17,10 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
   const [data,    setData]    = useState<Fundamentals | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+  const [descExpanded, setDescExpanded] = useState(false);
 
   useEffect(() => {
-    setLoading(true); setError(null); setData(null);
+    setLoading(true); setError(null); setData(null); setDescExpanded(false);
     fetchFundamentals(ticker)
       .then(setData)
       .catch(() => setError('Failed to load fundamentals'))
@@ -135,7 +136,16 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
       {data.description && (
         <div className="pt-1">
           <p className="text-[10px] text-dim uppercase tracking-wider mb-1.5">Business Description</p>
-          <p className="text-[11px] text-dim leading-relaxed line-clamp-4">{data.description}</p>
+          <p className={`text-[11px] text-dim leading-relaxed ${descExpanded ? '' : 'line-clamp-4'}`}>
+            {data.description}
+          </p>
+          <button
+            type="button"
+            onClick={() => setDescExpanded((v) => !v)}
+            className="text-[10px] text-ink/70 hover:text-ink mt-1 underline underline-offset-2"
+          >
+            {descExpanded ? 'Show less' : 'Show more'}
+          </button>
         </div>
       )}
     </div>

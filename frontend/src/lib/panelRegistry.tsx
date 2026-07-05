@@ -17,6 +17,8 @@ import { CCASFlowTab }     from '@/tabs/CCASFlowTab';
 import { DualListingTab }  from '@/tabs/DualListingTab';
 import { OwnershipTab }    from '@/tabs/OwnershipTab';
 import { PeersTab }        from '@/tabs/PeersTab';
+import { CompetitionTab }  from '@/tabs/CompetitionTab';
+import { CrossBorderTab }  from '@/tabs/CrossBorderTab';
 import { NewsTab }         from '@/tabs/NewsTab';
 import { WatchlistTab }    from '@/tabs/WatchlistTab';
 
@@ -135,6 +137,18 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     defaultSize: { w: 640, h: 480 },
     render: (ticker, h) => <PeersTab ticker={ticker} onSelect={h.openTicker} />,
   },
+  competition: {
+    label: 'Competition',
+    description: 'Commercial rivals running trials in this company’s lead indication.',
+    defaultSize: { w: 620, h: 520 },
+    render: ticker => <CompetitionTab ticker={ticker} />,
+  },
+  crossborder: {
+    label: 'Cross-Border',
+    description: 'A/H/US share-class prices on a common USD basis with premium/discount.',
+    defaultSize: { w: 560, h: 460 },
+    render: ticker => <CrossBorderTab ticker={ticker} />,
+  },
   news: {
     label: 'News',
     description: 'Recent headlines with AI sentiment context.',
@@ -150,9 +164,9 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
 };
 
 export const PANEL_ORDER: AppTab[] = [
-  'overview', 'fundamentals', 'pipeline', 'catalysts', 'news',
+  'overview', 'fundamentals', 'pipeline', 'catalysts', 'competition', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
-  'filings', 'ccas', 'duallisting', 'ownership', 'peers', 'screener', 'watchlist',
+  'filings', 'ccas', 'duallisting', 'crossborder', 'ownership', 'peers', 'screener', 'watchlist',
 ];
 
 export const DEFAULT_OPEN_PANELS: AppTab[] = ['overview', 'fundamentals', 'pipeline', 'news'];

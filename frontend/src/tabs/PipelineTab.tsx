@@ -83,6 +83,12 @@ function CTView({ trials }: { trials: Trial[] }) {
                     collaborator
                   </span>
                 )}
+                {(t.primaryEndpoint || t.comparator) && (
+                  <p className="text-[9px] text-dim mt-0.5 leading-snug line-clamp-1">
+                    {t.primaryEndpoint && <span title={`Primary endpoint: ${t.primaryEndpoint}`}>◦ {t.primaryEndpoint}</span>}
+                    {t.comparator && <span title="Comparator / control arm"> · vs {t.comparator}</span>}
+                  </p>
+                )}
               </td>
               <td className="py-2.5 pr-4 whitespace-nowrap">
                 {t.phase ? (
@@ -94,8 +100,13 @@ function CTView({ trials }: { trials: Trial[] }) {
               <td className={`py-2.5 pr-4 font-medium whitespace-nowrap ${statusColor(t.status)}`}>
                 {t.status ?? '—'}
               </td>
-              <td className="py-2.5 pr-4 text-right font-mono text-ink">
+              <td className="py-2.5 pr-4 text-right font-mono text-ink whitespace-nowrap">
                 {t.enrollment != null ? t.enrollment.toLocaleString() : '—'}
+                {t.enrollmentType && (
+                  <span className="block text-[8px] text-dim uppercase tracking-wider" title="Enrollment count is actual vs. estimated">
+                    {t.enrollmentType === 'ACTUAL' ? 'actual' : 'est.'}
+                  </span>
+                )}
               </td>
               <td className="py-2.5 text-dim font-mono whitespace-nowrap">
                 {fmtDate(t.completionDate)}

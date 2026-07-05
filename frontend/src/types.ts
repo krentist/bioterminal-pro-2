@@ -2,6 +2,7 @@ export type AppTab =
   | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
   | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership' | 'peers'
+  | 'competition' | 'crossborder'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -58,8 +59,16 @@ export interface Trial {
   conditions?: string[];
   interventions?: string[];
   prob_approval?: number | null;
+  probApproval?: number | null;
   sponsor?: string | null;
   isLeadSponsor?: boolean;
+  // Trial-level depth (Phase L)
+  enrollmentType?: string | null;      // ACTUAL | ESTIMATED
+  primaryEndpoint?: string | null;
+  comparator?: string | null;
+  hasComparator?: boolean;
+  primaryPurpose?: string | null;
+  primaryCompletionDate?: string | null;
 }
 
 export interface NewsItem {
@@ -418,6 +427,53 @@ export interface PipelineResearch {
   ai_available?:    boolean;
   ticker:           string;
   company_name:     string;
+}
+
+// ── Competitive landscape (Phase L) ───────────────────────────────────────────
+
+export interface Competitor {
+  sponsor: string;
+  nctId: string | null;
+  title: string | null;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  probApproval: number | null;
+  source_url: string | null;
+}
+
+export interface CompetitionData {
+  indication: string | null;
+  leadPhase: string | null;
+  leadProgram?: { title: string | null; nctId: string | null };
+  competitorCount?: number;
+  competitors: Competitor[];
+  note?: string;
+  source?: string;
+  source_url?: string;
+}
+
+// ── Cross-border A/H/US (Phase M) ─────────────────────────────────────────────
+
+export interface CrossBorderLeg {
+  exchange: 'CN' | 'HK' | 'US';
+  ticker: string;
+  currency: string;
+  priceLocal: number | null;
+  pricePerShareUsd: number | null;
+  premiumVsRefPct: number | null;
+  adsRatio?: number;
+}
+
+export interface CrossBorderData {
+  ticker: string;
+  cross_border: boolean;
+  name?: string;
+  referenceExchange?: 'CN' | 'HK' | 'US' | null;
+  usdhkd_rate?: number;
+  usdcny_rate?: number;
+  legs?: CrossBorderLeg[];
+  listedExchanges?: string[];
 }
 
 // ── Dual listing ──────────────────────────────────────────────────────────────
