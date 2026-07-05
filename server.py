@@ -18,7 +18,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,13 +45,15 @@ import alpha_screener as _screener
 import backtester as _backtester
 import devils_advocate as _devil
 import earnings_analyzer as _earnings
-from dual_listing import get_dual_listing_info
+from dual_listing import get_dual_listing_info, get_cross_border_info
 from exchanges import get_exchange_adapter
-from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline
+from llm_analysis import analyze_news_sentiment, summarize_pipeline, research_full_pipeline, _has_any_llm as _llm_has_any
 from model import predict as ml_predict
-from pipeline_analyzer import enrich_trials
-from rnpv_calculator import pipeline_rnpv
+from pipeline_analyzer import enrich_trials, upcoming_catalysts
+from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
 from utils import period_to_dates
+import compliance as _compliance
+import entities as _entities
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -71,17 +73,21 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ---------------------------------------------------------------------------
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
-# Matches /api/<endpoint>/<ticker> (with optional /port/5000 prefix)
-_TICKER_PATH_RE = re.compile(r"^(?:/port/5000)?/api/[^/]+/([^/?]+)")
+# Matches /api/<endpoint>/<param> (with optional /port/5000 prefix)
+_TICKER_PATH_RE = re.compile(r"^(?:/port/5000)?/api/([^/]+)/([^/?]+)")
 
 _PUBLIC_API_PATHS = {"/api/docs", "/api/openapi.json", "/api/redoc"}
+
+# Endpoints whose first path segment is NOT a ticker (e.g. a company id or sub-resource),
+# so the ticker-format check must not apply to them.
+_NON_TICKER_ENDPOINTS = {"company", "notes", "compliance"}
 
 
 class _ValidateTickerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         m = _TICKER_PATH_RE.match(request.url.path)
-        if m and not request.url.path.rstrip("/").endswith(("/api/docs", "/api/redoc")):
-            if not _TICKER_RE.match(m.group(1).upper()):
+        if m and m.group(1).lower() not in _NON_TICKER_ENDPOINTS:
+            if not _TICKER_RE.match(m.group(2).upper()):
                 return JSONResponse(status_code=400, content={"detail": "Invalid ticker symbol"})
         return await call_next(request)
 
@@ -92,7 +98,7 @@ class _ValidateTickerMiddleware(BaseHTTPMiddleware):
 
 class _APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if os.getenv("ENV", "development") != "production":
+        if os.getenv("ENV", "production") != "production":  # safe default: production
             return await call_next(request)
         raw_path = request.url.path
         # Requests via /port/5000/ are from the compiled SPA — allow without key.
@@ -179,6 +185,22 @@ def _currency_symbol(currency: str) -> str:
     return {"USD": "$", "HKD": "HK$", "CNY": "¥", "EUR": "€", "GBP": "£"}.get(currency, "$")
 
 
+def _utc_iso_z() -> str:
+    """Current UTC time as an ISO-8601 string ending in 'Z' (timezone-aware, non-deprecated)."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _epoch_to_iso(ts) -> Optional[str]:
+    """Convert a unix-epoch timestamp (e.g. yfinance regularMarketTime) to ISO-8601 'Z',
+    or None if absent/invalid. Used for honest 'as of' provenance labels."""
+    if isinstance(ts, (int, float)) and ts > 0:
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, OverflowError, OSError):
+            return None
+    return None
+
+
 def _load_watchlist() -> list[str]:
     try:
         return json.loads(WATCHLIST_PATH.read_text())
@@ -202,7 +224,7 @@ def _log_usage(ticker: str) -> None:
     """Append one usage record to usage_log.jsonl (thread-safe, best-effort)."""
     try:
         region = "HK" if ticker.upper().endswith(".HK") else "US"
-        entry  = json.dumps({"date": datetime.utcnow().strftime("%Y-%m-%d"), "ticker": ticker.upper(), "region": region})
+        entry  = json.dumps({"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "ticker": ticker.upper(), "region": region})
         with _usage_lock:
             with open(USAGE_LOG_PATH, "a") as f:
                 f.write(entry + "\n")
@@ -223,6 +245,50 @@ def _to_json_safe(obj):
     if isinstance(obj, np.floating):
         return None if (math.isnan(obj) or math.isinf(obj)) else float(obj)
     return obj
+
+
+# ---------------------------------------------------------------------------
+# MNPI compliance wall (Phase J / §0)
+# If the user has logged potential material non-public information on a ticker,
+# every trade-oriented route suppresses its computed signal for that name.
+# ---------------------------------------------------------------------------
+
+def _restricted_response(ticker: str, kind: str) -> Optional[dict]:
+    """Return a shape-preserving, signal-suppressed payload if `ticker` is restricted,
+    else None. Never computes or leaks a signal for a restricted name."""
+    if not _compliance.is_restricted(ticker):
+        return None
+    reason = _compliance.restricted_reason(ticker) or "Restricted: potential MNPI on this name."
+    sym = _currency_symbol("HKD" if ticker.upper().endswith(".HK") else "USD")
+    base = {"restricted": True, "restrictedReason": reason, "ai_generated": False}
+    if kind == "confidence":
+        return {**base, "score": None, "signal": "RESTRICTED", "factors": [], "newsImpact": None}
+    if kind == "dcf":
+        return {**base, "impliedSharePrice": None, "upside": None, "currencySymbol": sym, "dcf": None}
+    if kind == "rnpv":
+        return {**base, "impliedSharePrice": None, "upside": None, "currencySymbol": sym,
+                "valuationMethod": "rNPV", "rnpvTotal": None, "rnpvPerShare": None,
+                "pipelineDiscount": None, "rnpvDetail": []}
+    if kind == "scenarios":
+        return {**base, "currentPrice": None, "currencySymbol": sym, "scenarios": [], "monteCarlo": None}
+    if kind == "backtest":
+        return {**base, "metrics": None, "equityCurve": [], "trades": [], "ticker": ticker.upper()}
+    if kind == "risk":
+        return {**base, "ticker": ticker.upper(), "summary": None, "factors": []}
+    return base
+
+
+def _filter_restricted_screen(payload: dict) -> dict:
+    """Drop restricted tickers from a screener payload so a name the user holds potential
+    MNPI on is never surfaced as a screen idea."""
+    restricted = _compliance.restricted_tickers()
+    if not restricted:
+        return payload
+    results = [
+        r for r in payload.get("results", [])
+        if _compliance.normalize_ticker(r.get("ticker")) not in restricted
+    ]
+    return {**payload, "results": results}
 
 
 # ============================================================
@@ -249,6 +315,8 @@ def get_quote(ticker: str):
             "changePercent":  _safe(change_pct),
             "currency":       currency,
             "currencySymbol": _currency_symbol(currency),
+            "source":         "Yahoo Finance",
+            "asOf":           _epoch_to_iso(info.get("regularMarketTime")),
         }
     except Exception as exc:
         logger.error("quote(%s): %s", ticker, exc)
@@ -270,16 +338,23 @@ def get_realtime(ticker: str):
 
 @app.get("/api/stock/{ticker}")
 def get_stock(ticker: str, range: str = "1y"):
+    # Normalise both the UI range labels (1D, 1W, 1M, 3M, 1Y, 5Y) and raw
+    # yfinance period strings (1d, 5d, 1mo, ...) to a canonical period key.
+    _RANGE_ALIASES = {
+        "1D": "1d", "1W": "5d", "1M": "1mo", "3M": "3mo",
+        "6M": "6mo", "1Y": "1y", "2Y": "2y", "5Y": "5y", "MAX": "max",
+    }
+    period_key = _RANGE_ALIASES.get(range.upper(), range.lower())
     _PERIOD_MAP = {
         "1d": "1d", "5d": "5d", "1mo": "1mo", "3mo": "3mo",
         "6mo": "6mo", "1y": "1y", "2y": "2y", "5y": "5y", "max": "max",
     }
-    yf_period = _PERIOD_MAP.get(range, "1y")
+    yf_period = _PERIOD_MAP.get(period_key, "1y")
     _INTERVAL_MAP = {
         "1d": "2m",  "5d": "15m", "1mo": "1h",  "3mo": "1d",
         "6mo": "1d", "1y": "1d",  "2y": "1d",   "5y": "1wk", "max": "1mo",
     }
-    interval = _INTERVAL_MAP.get(range, "1d")
+    interval = _INTERVAL_MAP.get(period_key, "1d")
     try:
         hist = df_mod.get_price_history(ticker, period=yf_period, interval=interval)
         if hist.empty:
@@ -304,12 +379,62 @@ def get_stock(ticker: str, range: str = "1y"):
 # /api/fundamentals/{ticker}
 # ============================================================
 
+def _compute_runway(ticker: str, info: dict) -> dict:
+    """
+    Cash runway — the single most-watched clinical-stage biotech metric.
+
+    Burn is taken from the annual cash-flow *statement* (Free Cash Flow, then
+    Operating Cash Flow), which is far more reliable than the yfinance .info
+    scalar; the .info fields are used only as a last resort. A positive burn
+    source means the company funds itself, so runway does not apply. Burn is
+    returned as a positive annual cash-consumption figure and runway in years.
+    """
+    cash     = _safe(info.get("totalCash"))
+    stmt     = df_mod.get_annual_cashflow(ticker)
+    fcf_stmt = _safe(stmt.get("free_cash_flow"))
+    ocf_stmt = _safe(stmt.get("operating_cash_flow"))
+    info_ocf = _safe(info.get("operatingCashflow"))
+    info_fcf = _safe(info.get("freeCashflow"))
+
+    if fcf_stmt is not None:
+        burn_source, basis = fcf_stmt, "freeCashflow"
+    elif ocf_stmt is not None:
+        burn_source, basis = ocf_stmt, "operatingCashflow"
+    elif info_ocf is not None:
+        burn_source, basis = info_ocf, "operatingCashflow"
+    elif info_fcf is not None:
+        burn_source, basis = info_fcf, "freeCashflow"
+    else:
+        burn_source, basis = None, None
+
+    annual_burn = None
+    runway_years = None
+    cash_generating = None
+    if burn_source is not None:
+        cash_generating = burn_source >= 0
+        if not cash_generating:
+            annual_burn = -burn_source
+            if cash and annual_burn > 0:
+                runway_years = round(cash / annual_burn, 2)
+    return {
+        "cash":              cash,
+        "freeCashflow":      fcf_stmt if fcf_stmt is not None else info_fcf,
+        "operatingCashflow": ocf_stmt if ocf_stmt is not None else info_ocf,
+        "annualBurn":        annual_burn,
+        "runwayYears":       runway_years,
+        "cashGenerating":    cash_generating,
+        "burnBasis":         basis,
+    }
+
+
 @app.get("/api/fundamentals/{ticker}")
 def get_fundamentals(ticker: str):
     try:
         info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
+        runway   = _compute_runway(ticker, info)
         return _to_json_safe({
+            **runway,
             "marketCap":       info.get("marketCap"),
             "enterpriseValue": info.get("enterpriseValue"),
             "forwardPE":       info.get("forwardPE"),
@@ -349,6 +474,8 @@ def get_fundamentals(ticker: str):
             "website":         info.get("website"),
             "employees":       info.get("fullTimeEmployees"),
             "exchange":        info.get("exchange"),
+            "source":          "Yahoo Finance",
+            "asOf":            _epoch_to_iso(info.get("regularMarketTime")),
         })
     except Exception as exc:
         logger.error("fundamentals(%s): %s", ticker, exc)
@@ -366,9 +493,20 @@ def get_trials(ticker: str):
         if raw.empty:
             return {"trials": []}
         enriched = enrich_trials(raw)
+        # Distinguish trials this company actually leads from collaborator/registry
+        # matches (name-only hits like unrelated NCI/cooperative-group studies), so the
+        # UI never implies a partner's or registry's trial is this company's own.
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            _company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            _company = ticker
+        terms = _sponsor_match_terms(ticker, _company)
         trials = []
         for _, row in enriched.iterrows():
             nct_id = row.get("nct_id")
+            sponsor = row.get("sponsor")
+            is_lead = bool(sponsor) and any(t in str(sponsor).lower() for t in terms)
             trials.append({
                 "nctId":    nct_id,
                 "title":    row.get("title"),
@@ -376,17 +514,87 @@ def get_trials(ticker: str):
                 "status":   row.get("status"),
                 "condition":row.get("condition"),
                 "enrollment": _safe(row.get("enrollment")),
+                "enrollmentType": row.get("enrollment_type"),
                 "startDate":  row.get("start_date"),
                 "primaryCompletionDate": row.get("primary_completion_date"),
-                "sponsor":  row.get("sponsor"),
+                "sponsor":  sponsor,
+                "isLeadSponsor": is_lead,
                 "probApproval": _safe(float(row.get("prob_approval", 0))),
+                "primaryEndpoint": row.get("primary_endpoint"),
+                "interventions":   row.get("interventions"),
+                "comparator":      row.get("comparator"),
+                "hasComparator":   bool(row.get("comparator")),
+                "primaryPurpose":  row.get("primary_purpose"),
                 "registry": "ClinicalTrials.gov",
                 "source_url": f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
             })
-        return _to_json_safe({"trials": trials})
+        # Order lead-sponsor trials first so the company's own pipeline is what's seen.
+        trials.sort(key=lambda t: not t["isLeadSponsor"])
+        return _to_json_safe({
+            "trials": trials,
+            "source": "ClinicalTrials.gov",
+            "source_url": "https://clinicaltrials.gov",
+            "retrievedAt": _utc_iso_z(),
+        })
     except Exception as exc:
         logger.error("trials(%s): %s", ticker, exc)
         return {"trials": []}
+
+
+# ============================================================
+# /api/catalysts/{ticker}  — upcoming trial readout calendar
+# ============================================================
+
+@app.get("/api/catalysts/{ticker}")
+def get_catalysts(ticker: str, within_days: int = 540):
+    """
+    Forward calendar of clinical catalysts: trials whose primary-completion date is in
+    the future and within `within_days`, nearest first. Built from the same CT.gov data
+    as the pipeline, using the tested date logic in pipeline_analyzer.upcoming_catalysts.
+    """
+    try:
+        within_days = max(1, min(int(within_days), 1825))
+        raw = fetch_clinicaltrials(ticker)
+        if raw.empty:
+            return {"catalysts": [], "withinDays": within_days}
+        enriched = enrich_trials(raw)
+        upcoming = upcoming_catalysts(enriched, within_days=within_days)
+        # A catalyst calendar is about interventional readouts. Drop registry noise
+        # (retrospective/observational "Other" studies) and post-marketing Phase 4.
+        _INTERVENTIONAL = {"Phase 1", "Phase 1/2", "Phase 2", "Phase 2/3", "Phase 3", "NDA/BLA"}
+        if not upcoming.empty and "phase_clean" in upcoming.columns:
+            upcoming = upcoming[upcoming["phase_clean"].isin(_INTERVENTIONAL)]
+        if upcoming.empty:
+            return {"catalysts": [], "withinDays": within_days}
+
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            _company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            _company = ticker
+        terms = _sponsor_match_terms(ticker, _company)
+
+        catalysts = []
+        for _, row in upcoming.iterrows():
+            nct_id  = row.get("nct_id")
+            sponsor = row.get("sponsor")
+            catalysts.append({
+                "nctId":        nct_id,
+                "title":        row.get("title"),
+                "phase":        row.get("phase_clean") or row.get("phase"),
+                "status":       row.get("status"),
+                "condition":    row.get("condition"),
+                "date":         row.get("primary_completion_date"),
+                "daysAway":     _safe(row.get("days_to_primary")),
+                "sponsor":      sponsor,
+                "isLeadSponsor": bool(sponsor) and any(t in str(sponsor).lower() for t in terms),
+                "probApproval": _safe(float(row.get("prob_approval", 0))),
+                "source_url":   f"https://clinicaltrials.gov/study/{nct_id}" if nct_id else None,
+            })
+        return _to_json_safe({"catalysts": catalysts, "withinDays": within_days})
+    except Exception as exc:
+        logger.error("catalysts(%s): %s", ticker, exc)
+        return {"catalysts": [], "withinDays": within_days}
 
 
 # ============================================================
@@ -520,10 +728,12 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
         "signal":     signal,
         "factors":    factors,
         "mlSignal":   {
-            "signal":     ml_result.signal,
-            "bullProb":   ml_result.bull_prob,
-            "confidence": ml_result.confidence,
-            "trainedOn":  ml_result.trained_on,
+            "signal":      ml_result.signal,
+            "bullProb":    ml_result.bull_prob,
+            "confidence":  ml_result.confidence,
+            "trainedOn":   ml_result.trained_on,
+            "oosAccuracy": ml_result.oos_accuracy,
+            "oosSamples":  ml_result.oos_samples,
         },
         "newsImpact": {
             "keyEvent":       key_event,
@@ -532,8 +742,9 @@ def _build_confidence_payload(ticker: str, prices: "pd.DataFrame", funds: dict, 
             "interpretation": llm_result.get("interpretation"),
             "keyEvents":      llm_result.get("key_events", []),
             "ai_generated":   llm_result.get("ai_generated", False),
+            "ai_available":   llm_result.get("ai_available", False),
         },
-        "lastUpdated": datetime.utcnow().isoformat() + "Z",
+        "lastUpdated": _utc_iso_z(),
     })
 
 
@@ -544,13 +755,19 @@ def _default_confidence() -> dict:
     ]
     return {
         "score": 50, "signal": "NEUTRAL", "factors": factors,
-        "newsImpact": {"keyEvent": None, "recentCount": 0, "sentimentScore": 0.0},
-        "lastUpdated": datetime.utcnow().isoformat() + "Z",
+        "mlSignal": {"signal": "NEUTRAL", "bullProb": 0.5, "confidence": 0.0,
+                     "trainedOn": 0, "oosAccuracy": None, "oosSamples": 0},
+        "newsImpact": {"keyEvent": None, "recentCount": 0, "sentimentScore": 0.0,
+                       "ai_generated": False, "ai_available": _llm_has_any()},
+        "lastUpdated": _utc_iso_z(),
     }
 
 
 @app.get("/api/confidence/{ticker}")
 def get_confidence(ticker: str):
+    restricted = _restricted_response(ticker, "confidence")
+    if restricted is not None:
+        return restricted
     now = time.monotonic()
     cached, ts = _CONFIDENCE_CACHE.get(ticker.upper(), (None, 0.0))
     if cached is not None and now - ts < _CONFIDENCE_CACHE_TTL:
@@ -560,7 +777,22 @@ def get_confidence(ticker: str):
         funds  = df_mod.get_financial_metrics(ticker)
         if prices.empty or len(prices) < 120:
             return _default_confidence()
-        result = ml_predict(ticker, prices)
+
+        # Fetch sector benchmark aligned to ticker's trading days.
+        # US biotech → XBI (SPDR S&P Biotech ETF); HK → 2800.HK (Tracker Fund).
+        # Falls back to absolute-return target if benchmark unavailable.
+        sector_closes: "pd.Series | None" = None
+        try:
+            benchmark = "2800.HK" if ticker.upper().endswith(".HK") else "XBI"
+            sec_hist  = df_mod.get_price_history(benchmark, period="2y")
+            if not sec_hist.empty:
+                aligned = sec_hist["Close"].reindex(prices.index, method="ffill").dropna()
+                if len(aligned) >= len(prices) * 0.9:
+                    sector_closes = aligned.reindex(prices.index)
+        except Exception:
+            pass
+
+        result  = ml_predict(ticker, prices, sector_closes=sector_closes)
         payload = _build_confidence_payload(ticker, prices, funds, result)
         _CONFIDENCE_CACHE[ticker.upper()] = (payload, time.monotonic())
         return payload
@@ -573,16 +805,61 @@ def get_confidence(ticker: str):
 # /api/dcf/{ticker}  — DCF valuation  (GET defaults, POST custom)
 # ============================================================
 
+def _sponsor_match_terms(ticker: str, company_name: str) -> list[str]:
+    """Lower-cased name fragments that identify this company as a trial's lead sponsor."""
+    terms: list[str] = []
+    overrides = df_mod._CT_TICKER_NAME_OVERRIDES.get(ticker.upper(), [])
+    for name in overrides + df_mod._ct_name_variants(company_name or ticker):
+        n = (name or "").strip().lower()
+        if len(n) >= 4 and n not in terms:
+            terms.append(n)
+    return terms
+
+
+def _select_pipeline_programs(enriched: "pd.DataFrame", ticker: str, company_name: str) -> tuple["pd.DataFrame", bool]:
+    """
+    Turn a raw trials DataFrame into a defensible list of *programs* for rNPV.
+
+    1. Keep only trials this company actually leads (sponsor name matches), so
+       collaborator/registry noise (NCI, cooperative groups, unrelated studies) is
+       dropped. If nothing matches (common for HK biotechs whose trials are
+       registered under a partner), fall back to all trials and flag it.
+    2. De-duplicate to one program per (phase, primary indication), preferring
+       active trials with larger enrollment — so the same drug run across several
+       trials is not counted as several $500M assets.
+    """
+    if enriched.empty:
+        return enriched, False
+
+    terms = _sponsor_match_terms(ticker, company_name)
+    sponsor_l = enriched.get("sponsor", pd.Series("", index=enriched.index)).fillna("").str.lower()
+    mask = sponsor_l.apply(lambda s: any(t in s for t in terms)) if terms else pd.Series(False, index=enriched.index)
+    sponsor_matched = bool(mask.any())
+    df = enriched[mask].copy() if sponsor_matched else enriched.copy()
+
+    cond = df.get("condition", pd.Series("", index=df.index)).fillna("")
+    df["_indication"] = cond.str.split(",").str[0].str.strip().str.lower()
+    df["_key"] = df["phase_clean"].astype(str) + "|" + df["_indication"]
+    sort_cols = [c for c in ("is_active", "enrollment") if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=False, na_position="last")
+    df = df.drop_duplicates("_key").drop(columns=["_indication", "_key"])
+    return df, sponsor_matched
+
+
 def _rnpv_valuation(ticker: str, info: dict) -> dict:
     """Compute rNPV-based valuation for pre-revenue pipeline companies."""
     currency   = info.get("currency", "USD")
     shares_out = _safe(info.get("sharesOutstanding"), 1e9)
     current_px = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
     mktcap     = _safe(info.get("marketCap"), 0)
+    company_name = info.get("longName") or info.get("shortName") or ticker
 
     raw      = fetch_clinicaltrials(ticker)
     enriched = enrich_trials(raw) if not raw.empty else raw
-    total_rnpv, detail_df = pipeline_rnpv(enriched)
+    trials_found = int(len(enriched))
+    programs, sponsor_matched = _select_pipeline_programs(enriched, ticker, company_name) if not enriched.empty else (enriched, False)
+    total_rnpv, detail_df = pipeline_rnpv(programs)
 
     rnpv_per_share = (total_rnpv / shares_out) if shares_out else None
     upside = (rnpv_per_share / current_px - 1) if (rnpv_per_share and current_px) else None
@@ -610,6 +887,21 @@ def _rnpv_valuation(ticker: str, info: dict) -> dict:
         "pipelineDiscount":  round(pipeline_discount, 4) if pipeline_discount is not None else None,
         "rnpvDetail":        detail,
         "dcf":               None,
+        # Transparency: what was actually valued and under what blanket assumption.
+        "trialsFound":       trials_found,
+        "programsValued":    int(len(detail_df)),
+        "sponsorMatched":    sponsor_matched,
+        "peakSalesAssumption": DEFAULT_PEAK_SALES_USD,
+        "assumptionNote": (
+            "Programs = this company's lead-sponsor trials, de-duplicated by phase and "
+            "indication. Each program uses a uniform " f"${DEFAULT_PEAK_SALES_USD/1e6:.0f}M "
+            "peak-sales placeholder (not drug-specific), so totals are a rough pipeline-scale "
+            "estimate, not a per-asset valuation."
+            if sponsor_matched else
+            "No trials on ClinicalTrials.gov are registered under this company as lead sponsor "
+            "(common for HK/China biotechs whose trials sit under a partner). rNPV is computed "
+            "over all name-matched trials and is therefore unreliable — treat as indicative only."
+        ),
     })
 
 
@@ -621,16 +913,27 @@ def _run_dcf(ticker: str, assumptions: dict) -> dict:
         shares_out  = _safe(info.get("sharesOutstanding"), 1e9)
         revenue     = _safe(info.get("totalRevenue"), 0)
         current_px  = _safe(info.get("regularMarketPrice") or info.get("currentPrice"), 0)
+        op_margin_actual = _safe(info.get("operatingMargins"), None)
 
+        # DCF is only coherent for a company that already generates operating profit.
+        # For pre-revenue or loss-making biotech (the bulk of this universe) a DCF built
+        # on assumed positive margins prints a fictitious number, so route to rNPV.
         if not revenue or revenue <= 0:
             return _rnpv_valuation(ticker, info)
+        if op_margin_actual is None or op_margin_actual <= 0:
+            return _rnpv_valuation(ticker, info)
+
+        # Clamp per-year growth so a single noisy yfinance revenueGrowth value can't
+        # compound into a fantasy valuation.
+        def _clamp_growth(x: float) -> float:
+            return min(max(float(x), -0.5), 0.60)
 
         g = [
-            assumptions.get("revenueGrowthY1", 0.15),
-            assumptions.get("revenueGrowthY2", 0.12),
-            assumptions.get("revenueGrowthY3", 0.10),
-            assumptions.get("revenueGrowthY4", 0.08),
-            assumptions.get("revenueGrowthY5", 0.06),
+            _clamp_growth(assumptions.get("revenueGrowthY1", 0.15)),
+            _clamp_growth(assumptions.get("revenueGrowthY2", 0.12)),
+            _clamp_growth(assumptions.get("revenueGrowthY3", 0.10)),
+            _clamp_growth(assumptions.get("revenueGrowthY4", 0.08)),
+            _clamp_growth(assumptions.get("revenueGrowthY5", 0.06)),
         ]
         wacc       = assumptions.get("wacc", 0.10)
         terminal_g = assumptions.get("terminalGrowth", 0.03)
@@ -682,6 +985,8 @@ def _default_assumptions(ticker: str) -> dict:
     try:
         info = df_mod._cached_yf_info(ticker)
         rev_growth = _safe(info.get("revenueGrowth"), 0.10)
+        # Cap the seed so an outlier trailing growth figure doesn't drive a runaway DCF.
+        rev_growth = min(max(rev_growth, -0.5), 0.40)
         op_margin  = _safe(info.get("operatingMargins"), 0.20)
         return {
             "revenueGrowthY1": max(rev_growth, -0.5),
@@ -707,12 +1012,18 @@ def _default_assumptions(ticker: str) -> dict:
 
 @app.get("/api/dcf/{ticker}")
 def get_dcf(ticker: str):
+    restricted = _restricted_response(ticker, "dcf")
+    if restricted is not None:
+        return restricted
     assumptions = _default_assumptions(ticker)
     return _to_json_safe(_run_dcf(ticker, assumptions))
 
 
 @app.post("/api/dcf/{ticker}")
 def update_dcf(ticker: str, body: dict):
+    restricted = _restricted_response(ticker, "dcf")
+    if restricted is not None:
+        return restricted
     assumptions = {**_default_assumptions(ticker), **body}
     return _to_json_safe(_run_dcf(ticker, assumptions))
 
@@ -723,6 +1034,9 @@ def update_dcf(ticker: str, body: dict):
 
 @app.get("/api/rnpv/{ticker}")
 def get_rnpv(ticker: str):
+    restricted = _restricted_response(ticker, "rnpv")
+    if restricted is not None:
+        return restricted
     try:
         info = df_mod._cached_yf_info(ticker)
         return _rnpv_valuation(ticker, info)
@@ -737,6 +1051,9 @@ def get_rnpv(ticker: str):
 
 @app.get("/api/scenarios/{ticker}")
 def get_scenarios(ticker: str):
+    restricted = _restricted_response(ticker, "scenarios")
+    if restricted is not None:
+        return restricted
     try:
         info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
@@ -854,9 +1171,8 @@ def get_watchlist():
     return _load_watchlist()
 
 
-@app.post("/api/watchlist")
-def add_to_watchlist(body: dict):
-    symbol = (body.get("symbol") or body.get("ticker") or "").strip().upper()
+def _add_watchlist_symbol(symbol: str) -> list[str]:
+    symbol = (symbol or "").strip().upper()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
     wl = _load_watchlist()
@@ -865,6 +1181,19 @@ def add_to_watchlist(body: dict):
             raise HTTPException(status_code=400, detail="Watchlist limit of 50 tickers reached")
         wl.append(symbol)
         _save_watchlist(wl)
+    return wl
+
+
+@app.post("/api/watchlist")
+def add_to_watchlist(body: dict):
+    wl = _add_watchlist_symbol(body.get("symbol") or body.get("ticker") or "")
+    return {"watchlist": wl}
+
+
+@app.post("/api/watchlist/{ticker}")
+def add_to_watchlist_path(ticker: str):
+    """Path-param variant used by the SPA (POST /api/watchlist/{ticker})."""
+    wl = _add_watchlist_symbol(ticker)
     return {"watchlist": wl}
 
 
@@ -893,6 +1222,55 @@ def get_dual_listing(ticker: str):
 
 
 # ============================================================
+# /api/cross-border/{ticker}  — A/H/US share-class view (Phase M / §3)
+# ============================================================
+
+@app.get("/api/cross-border/{ticker}")
+def get_cross_border(ticker: str):
+    """One asset across CN/HK/US: each share class priced per-ordinary-share in USD with a
+    premium/discount vs the reference leg. Returns cross_border=False if not a known group."""
+    try:
+        result = get_cross_border_info(ticker)
+        if result is None:
+            return {"cross_border": False, "ticker": ticker.upper()}
+        return _to_json_safe(result)
+    except Exception as exc:
+        logger.error("cross_border(%s): %s", ticker, exc)
+        return {"cross_border": False, "ticker": ticker.upper()}
+
+
+# ============================================================
+# /api/nmpa/{ticker}  — NMPA drug-approval status (honest deep-link, Phase M / §3)
+# ============================================================
+
+@app.get("/api/nmpa/{ticker}")
+def get_nmpa(ticker: str):
+    """NMPA approval status. There is no free, machine-readable NMPA approval feed, so this
+    returns an honest 'not available' state with official deep-links for manual verification
+    rather than fabricating regulatory data."""
+    try:
+        info = df_mod._cached_yf_info(ticker)
+        name = (info.get("longName") or info.get("shortName") or ticker).strip()
+    except Exception:
+        name = ticker
+    name_q = _url_quote(name)
+    return {
+        "ticker":  ticker.upper(),
+        "company": name,
+        "status":  "not_available",
+        "message": (
+            "NMPA drug-approval status is not published as a free, machine-readable feed. "
+            "Verify approvals and registered trials by company name via the official portals below."
+        ),
+        "nmpaQueryUrl": "https://www.nmpa.gov.cn/datasearch/home-index.html",
+        "cdeTrialsUrl": "http://www.chinadrugtrials.org.cn/clinicaltrialsearch.dhtml",
+        "whoIctrpUrl":  f"https://trialsearch.who.int/AdvSearch.aspx?SearchTerms={name_q}",
+        "source":       "NMPA / CDE (manual verification)",
+        "ai_generated": False,
+    }
+
+
+# ============================================================
 # /api/pipeline-summary/{ticker}  — LLM pipeline risk summarisation
 # ============================================================
 
@@ -915,6 +1293,7 @@ def get_pipeline_summary(ticker: str):
             "key_risks": [],
             "upcoming_catalysts": [],
             "ai_generated": False,
+            "ai_available": _llm_has_any(),
         }
 
 
@@ -1029,6 +1408,7 @@ def get_pipeline_research(ticker: str):
             "hk_china_angle": "",
             "data_note": "",
             "ai_generated": False,
+            "ai_available": _llm_has_any(),
             "ticker": ticker,
         }
 
@@ -1122,6 +1502,8 @@ def get_sources(ticker: str):
         ),
     }
 
+    is_cn = ticker.upper().endswith((".SS", ".SZ"))
+
     if is_hk:
         raw_code = ticker.upper().replace(".HK", "").lstrip("0") or "0"
         hk_code  = f"{int(raw_code):04d}"
@@ -1130,6 +1512,14 @@ def get_sources(ticker: str):
         )
         sources["nmpa_url"]  = "https://www.nmpa.gov.cn/"
         sources["ctctr_url"] = "http://www.chinadrugtrials.org.cn/index.html"
+        sources["yicai_url"] = f"https://www.yicai.com/search/?keywords={name_q}"
+    elif is_cn:
+        exch = "sse" if ticker.upper().endswith(".SS") else "szse"
+        sources["nmpa_query_url"] = "https://www.nmpa.gov.cn/datasearch/home-index.html"
+        sources["cde_trials_url"] = "http://www.chinadrugtrials.org.cn/clinicaltrialsearch.dhtml"
+        sources["exchange_url"] = (
+            "https://www.sse.com.cn/" if exch == "sse" else "https://www.szse.cn/"
+        )
         sources["yicai_url"] = f"https://www.yicai.com/search/?keywords={name_q}"
     else:
         ticker_q = _url_quote(ticker.upper())
@@ -1142,6 +1532,32 @@ def get_sources(ticker: str):
 
 
 # ============================================================
+# /api/ownership/{ticker}  — institutional/insider ownership + short interest
+# ============================================================
+
+@app.get("/api/ownership/{ticker}")
+def get_ownership_route(ticker: str):
+    try:
+        return _to_json_safe(df_mod.get_ownership(ticker))
+    except Exception as exc:
+        logger.error("ownership(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/peers/{ticker}  — curated peer comparables table
+# ============================================================
+
+@app.get("/api/peers/{ticker}")
+def get_peers_route(ticker: str):
+    try:
+        return _to_json_safe({"peers": df_mod.get_peer_comps(ticker, n=6)})
+    except Exception as exc:
+        logger.error("peers(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
 # /api/backtest/{ticker}  — RSI+MACD strategy backtest
 # ============================================================
 
@@ -1151,6 +1567,9 @@ _BACKTEST_CACHE_TTL = 3600  # hourly — price-derived, stable intraday
 
 @app.get("/api/backtest/{ticker}")
 def get_backtest(ticker: str, period: str = "2y"):
+    restricted = _restricted_response(ticker, "backtest")
+    if restricted is not None:
+        return restricted
     key = f"{ticker.upper()}:{period}"
     now = time.monotonic()
     cached, ts = _BACKTEST_CACHE.get(key, (None, 0.0))
@@ -1210,7 +1629,7 @@ def get_screen(region: str = "HK"):
     now = time.monotonic()
     cached, ts = _SCREEN_CACHE.get(region, (None, 0.0))
     if cached is not None and now - ts < _SCREEN_CACHE_TTL:
-        return cached
+        return _filter_restricted_screen(cached)
     try:
         df = _screener.run_screen(region=region, top_n=15)
         if df.empty:
@@ -1233,10 +1652,10 @@ def get_screen(region: str = "HK"):
         payload = {
             "region":   region,
             "results":  results,
-            "cachedAt": datetime.utcnow().isoformat() + "Z",
+            "cachedAt": _utc_iso_z(),
         }
         _SCREEN_CACHE[region] = (payload, time.monotonic())
-        return payload
+        return _filter_restricted_screen(payload)
     except Exception as exc:
         logger.error("screen(%s): %s", region, exc)
         raise HTTPException(status_code=502, detail=str(exc))
@@ -1252,6 +1671,9 @@ _RISK_CACHE_TTL = 1800
 
 @app.get("/api/risk/{ticker}")
 def get_risk(ticker: str):
+    restricted = _restricted_response(ticker, "risk")
+    if restricted is not None:
+        return restricted
     key = ticker.upper()
     now = time.monotonic()
     cached, ts = _RISK_CACHE.get(key, (None, 0.0))
@@ -1331,6 +1753,257 @@ def get_earnings(ticker: str):
     except Exception as exc:
         logger.error("earnings(%s): %s", ticker, exc)
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# /api/competition/{ticker}  — competitive landscape per indication (Phase L / §2)
+# ============================================================
+
+_COMPETITION_CACHE: dict[str, tuple[dict, float]] = {}
+_COMPETITION_CACHE_TTL = 1800
+_PHASE_RANK = {
+    "Phase 1": 1, "Phase 1/2": 2, "Phase 2": 3, "Phase 2/3": 4,
+    "Phase 3": 5, "Phase 4": 4, "NDA/BLA": 6, "Approved": 7,
+}
+
+# ClinicalTrials.gov by-condition search returns many academic / government / investigator-
+# sponsored studies. A *competitive* landscape is about commercial rivals, so filter those out.
+_ACADEMIC_GOV_RE = re.compile(
+    r"(universit|\buniv\b|hospital|\bcollege\b|institute|institut|foundation|fondazione|"
+    r"fundaci|funda[cç][aã]o|ministry|\bnhs\b|national institut|medical cent|cancer cent|"
+    r"health (authority|service|system)|\bclinic\b|\bclinica\b|klinik|academy|"
+    r"assistance publique|\bcnrs\b|\bnci\b|\bnih\b|veterans|research cent|"
+    r"cooperative|consortium|\btrust\b|\bm\.?d\.?\b|\bph\.?d\.?\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_industry_sponsor(name: str) -> bool:
+    """Heuristic: keep commercial sponsors, drop academic/government/individual ones."""
+    n = (name or "").strip()
+    if not n:
+        return False
+    if _ACADEMIC_GOV_RE.search(n):
+        return False
+    if n == n.lower():           # investigator names are often entered all-lowercase
+        return False
+    return True
+
+
+@app.get("/api/competition/{ticker}")
+def get_competition(ticker: str):
+    """Who else is in this race: other sponsors running interventional trials in this
+    company's lead indication, most-advanced program per rival sponsor."""
+    key = ticker.upper()
+    now = time.monotonic()
+    cached, ts = _COMPETITION_CACHE.get(key, (None, 0.0))
+    if cached is not None and now - ts < _COMPETITION_CACHE_TTL:
+        return cached
+    try:
+        raw = fetch_clinicaltrials(ticker)
+        if raw.empty:
+            return {"indication": None, "leadPhase": None, "competitors": [],
+                    "note": "No pipeline found for this ticker."}
+        enriched = enrich_trials(raw)
+        try:
+            _info = df_mod._cached_yf_info(ticker)
+            company = _info.get("longName") or _info.get("shortName") or ticker
+        except Exception:
+            company = ticker
+        terms = _sponsor_match_terms(ticker, company)
+
+        sponsor_l = enriched["sponsor"].fillna("").str.lower()
+        own_mask = sponsor_l.apply(lambda s: any(t in s for t in terms)) if terms else pd.Series(False, index=enriched.index)
+        own = enriched[own_mask] if own_mask.any() else enriched
+        own = own.copy()
+        own["_rank"] = own["phase_clean"].map(_PHASE_RANK).fillna(0)
+        sort_cols = [c for c in ("_rank", "is_active") if c in own.columns]
+        own = own.sort_values(sort_cols, ascending=False)
+        lead = own.iloc[0]
+        indication = str(lead.get("condition") or "").split(",")[0].strip()
+        lead_phase = lead.get("phase_clean")
+        if not indication:
+            return {"indication": None, "leadPhase": lead_phase, "competitors": [],
+                    "note": "Lead indication could not be determined from the pipeline."}
+
+        rivals_raw = df_mod.fetch_clinicaltrials_by_condition(indication)
+        competitors: list[dict] = []
+        seen: set[str] = set()
+        if not rivals_raw.empty:
+            renr = enrich_trials(rivals_raw)
+            renr = renr.copy()
+            renr["_rank"] = renr["phase_clean"].map(_PHASE_RANK).fillna(0)
+            renr = renr.sort_values("_rank", ascending=False)
+            for _, row in renr.iterrows():
+                sponsor = str(row.get("sponsor") or "")
+                if not sponsor or row.get("phase_clean") == "Other":
+                    continue
+                if not _is_industry_sponsor(sponsor):   # commercial rivals only
+                    continue
+                sl = sponsor.lower()
+                if any(t in sl for t in terms):   # exclude our own trials
+                    continue
+                if sl in seen:                    # one (most-advanced) row per rival sponsor
+                    continue
+                seen.add(sl)
+                nct = row.get("nct_id")
+                competitors.append({
+                    "sponsor":   sponsor,
+                    "nctId":     nct,
+                    "title":     row.get("title"),
+                    "phase":     row.get("phase_clean") or row.get("phase"),
+                    "status":    row.get("status"),
+                    "condition": row.get("condition"),
+                    "probApproval": _safe(float(row.get("prob_approval", 0))),
+                    "source_url": f"https://clinicaltrials.gov/study/{nct}" if nct else None,
+                })
+        competitors.sort(key=lambda c: _PHASE_RANK.get(c["phase"], 0), reverse=True)
+        payload = _to_json_safe({
+            "indication":     indication,
+            "leadPhase":      lead_phase,
+            "leadProgram":    {"title": lead.get("title"), "nctId": lead.get("nct_id")},
+            "competitorCount": len(competitors),
+            "competitors":    competitors[:40],
+            "note": "Commercial sponsors in the same indication (academic, government, and "
+                    "investigator-sponsored studies are filtered out); most-advanced program "
+                    "per sponsor.",
+            "source":         "ClinicalTrials.gov",
+            "source_url": (
+                f"https://clinicaltrials.gov/search?cond={_url_quote(indication)}"
+                "&aggFilters=studyType:int"
+            ),
+        })
+        _COMPETITION_CACHE[key] = (payload, time.monotonic())
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("competition(%s): %s", ticker, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# Compliance wall (Phase J / §0)
+#   /api/notes            — capture private research notes (with provenance + MNPI triage)
+#   /api/restricted       — tickers restricted because the user logged potential MNPI
+#   /api/restricted/{t}/lift — clear a restriction (audit-logged)
+#   /api/compliance/audit — immutable audit trail
+# Note free-text is never fed into any signal route and never leaves this host.
+# ============================================================
+
+@app.get("/api/notes")
+def get_notes(subject: Optional[str] = None):
+    return {"notes": _compliance.list_notes(subject)}
+
+
+@app.post("/api/notes")
+def create_note(body: dict):
+    subject = (body.get("subject") or "").strip()
+    text    = (body.get("text") or body.get("freeText") or "").strip()
+    if not subject or not text:
+        raise HTTPException(status_code=400, detail="subject and text are required")
+    note = _compliance.add_note(
+        subject,
+        text,
+        source=(body.get("source") or "").strip(),
+        subject_ticker=body.get("subjectTicker") or body.get("ticker"),
+        is_public_subject=bool(body.get("isPublicSubject")),
+        is_material_nonpublic=bool(body.get("isMaterialNonpublic")),
+    )
+    return note
+
+
+@app.get("/api/restricted")
+def get_restricted():
+    return {"restricted": _compliance.list_restricted()}
+
+
+@app.post("/api/restricted/{ticker}/lift")
+def lift_restricted(ticker: str, note: str = ""):
+    if not _compliance.lift_restriction(ticker, note):
+        raise HTTPException(status_code=404, detail="ticker is not restricted")
+    return {"ticker": _compliance.normalize_ticker(ticker), "restricted": False, "lifted": True}
+
+
+@app.get("/api/compliance/audit")
+def get_compliance_audit():
+    return {"audit": _compliance.list_audit()}
+
+
+# ============================================================
+# Private company entity model (Phase K / §1)
+#   /api/company              — create / list private (pre-IPO) companies
+#   /api/company/{id}         — full view: pipeline + rNPV + comps + notes
+#   /api/company/{id}/funding — attach a funding round (private-market comp)
+#   /api/company/{id}/notes   — attach a diligence note (data-room)
+# No price / DCF / backtest / scenarios — meaningless without a traded security.
+# ============================================================
+
+@app.post("/api/company")
+def create_company_route(body: dict):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        return _entities.create_company(
+            name,
+            listing_status=(body.get("listingStatus") or "private"),
+            ct_sponsor_name=body.get("ctSponsorName"),
+            linked_ticker=body.get("linkedTicker"),
+            description=body.get("description") or "",
+            aliases=body.get("aliases"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/company")
+def list_companies_route(q: Optional[str] = None):
+    return {"companies": _entities.list_companies(q)}
+
+
+@app.get("/api/company/{company_id}")
+def get_company_route(company_id: str):
+    try:
+        view = _entities.company_view(company_id)
+    except Exception as exc:
+        logger.error("company_view(%s): %s", company_id, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    if view is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return _to_json_safe(view)
+
+
+@app.post("/api/company/{company_id}/funding")
+def add_funding_route(company_id: str, body: dict):
+    r = _entities.add_funding_round(
+        company_id,
+        date=body.get("date"),
+        round_type=body.get("roundType"),
+        amount_usd=body.get("amountUsd"),
+        post_money_usd=body.get("postMoneyUsd"),
+        lead_investor=body.get("leadInvestor"),
+        source=body.get("source"),
+        source_url=body.get("sourceUrl"),
+    )
+    if r is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return r
+
+
+@app.post("/api/company/{company_id}/notes")
+def add_company_note_route(company_id: str, body: dict):
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    note = _entities.attach_note(
+        company_id, text,
+        source=(body.get("source") or "").strip(),
+        is_material_nonpublic=bool(body.get("isMaterialNonpublic")),
+    )
+    if note is None:
+        raise HTTPException(status_code=404, detail="company not found")
+    return note
 
 
 # ============================================================

@@ -75,6 +75,20 @@ function CTView({ trials }: { trials: Trial[] }) {
               </td>
               <td className="py-2.5 pr-4 text-ink max-w-xs">
                 <p className="line-clamp-2 leading-snug">{t.title || '—'}</p>
+                {t.isLeadSponsor === false && (
+                  <span
+                    title={t.sponsor ? `Lead sponsor: ${t.sponsor}` : 'Not lead-sponsored by this company'}
+                    className="inline-block mt-0.5 text-[8px] uppercase tracking-wider text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-1 py-0.5"
+                  >
+                    collaborator
+                  </span>
+                )}
+                {(t.primaryEndpoint || t.comparator) && (
+                  <p className="text-[9px] text-dim mt-0.5 leading-snug line-clamp-1">
+                    {t.primaryEndpoint && <span title={`Primary endpoint: ${t.primaryEndpoint}`}>◦ {t.primaryEndpoint}</span>}
+                    {t.comparator && <span title="Comparator / control arm"> · vs {t.comparator}</span>}
+                  </p>
+                )}
               </td>
               <td className="py-2.5 pr-4 whitespace-nowrap">
                 {t.phase ? (
@@ -86,8 +100,13 @@ function CTView({ trials }: { trials: Trial[] }) {
               <td className={`py-2.5 pr-4 font-medium whitespace-nowrap ${statusColor(t.status)}`}>
                 {t.status ?? '—'}
               </td>
-              <td className="py-2.5 pr-4 text-right font-mono text-ink">
+              <td className="py-2.5 pr-4 text-right font-mono text-ink whitespace-nowrap">
                 {t.enrollment != null ? t.enrollment.toLocaleString() : '—'}
+                {t.enrollmentType && (
+                  <span className="block text-[8px] text-dim uppercase tracking-wider" title="Enrollment count is actual vs. estimated">
+                    {t.enrollmentType === 'ACTUAL' ? 'actual' : 'est.'}
+                  </span>
+                )}
               </td>
               <td className="py-2.5 text-dim font-mono whitespace-nowrap">
                 {fmtDate(t.completionDate)}
@@ -265,6 +284,28 @@ function ProgramRow({ prog }: { prog: PipelineProgram }) {
 // ── AI Research view ──────────────────────────────────────────────────────────
 
 function AIResearchView({ data }: { data: PipelineResearch }) {
+  // When the model didn't produce a result, say why plainly rather than showing an
+  // "AI assessment" of an error string followed by a misleading "No programs found".
+  if (!data.ai_generated) {
+    const notConfigured = data.ai_available === false;
+    return (
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Sparkles size={12} className="text-amber-400" />
+          <span className="text-[11px] font-semibold text-amber-300">
+            {notConfigured ? 'AI research not configured' : 'AI research unavailable'}
+          </span>
+        </div>
+        <p className="text-[11px] text-amber-200/90 leading-relaxed">{data.pipeline_summary}</p>
+        <p className="text-[10px] text-dim mt-2 leading-relaxed">
+          The ClinicalTrials.gov pipeline above is unaffected — switch back to the CT.gov view
+          for registered trials.
+          {notConfigured && ' AI research needs an LLM API key (Anthropic, Groq, OpenRouter, or Gemini) set on the server.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Summary */}
@@ -361,7 +402,14 @@ export function PipelineTab({ ticker }: { ticker: string }) {
       {/* ── Header row: counts + AI button ── */}
       <div className="flex items-center justify-between gap-4">
         <p className="text-[11px] text-dim">
-          {ctLoading ? 'Loading…' : `${trials.length} trial${trials.length !== 1 ? 's' : ''} on ClinicalTrials.gov`}
+          {ctLoading
+            ? 'Loading…'
+            : `${trials.length} trial${trials.length !== 1 ? 's' : ''} on ClinicalTrials.gov`}
+          {!ctLoading && trials.filter(t => t.isLeadSponsor === false).length > 0 && (
+            <span className="text-amber-400/80">
+              {' '}· {trials.filter(t => t.isLeadSponsor === false).length} collaborator-sponsored
+            </span>
+          )}
         </p>
         <div className="flex items-center gap-2">
           {showAI && (

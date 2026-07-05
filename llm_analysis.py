@@ -303,10 +303,16 @@ _SENTIMENT_DEFAULT = {
 
 def analyze_news_sentiment(headlines: list[str], ticker: str) -> dict:
     if not _has_any_llm():
-        return _SENTIMENT_DEFAULT.copy()
+        return {
+            **_SENTIMENT_DEFAULT,
+            "interpretation": "AI sentiment analysis is not configured on this deployment "
+                              "(no LLM API key set).",
+            "ai_available": False,
+        }
 
     if not headlines:
-        return {**_SENTIMENT_DEFAULT, "interpretation": "No recent headlines found."}
+        return {**_SENTIMENT_DEFAULT, "interpretation": "No recent headlines found.",
+                "ai_available": True}
 
     headline_block = "\n".join(f"- {h}" for h in headlines[:20])
     user_prompt = f"Ticker: {ticker}\n\nRecent headlines:\n{headline_block}"
@@ -320,10 +326,15 @@ def analyze_news_sentiment(headlines: list[str], ticker: str) -> dict:
             "interpretation": result.get("interpretation", ""),
             "key_events":     result.get("key_events", []),
             "ai_generated":   True,
+            "ai_available":   True,
         }
     except Exception as exc:
         logger.error("analyze_news_sentiment(%s): %s", ticker, _safe_err(exc))
-        return _SENTIMENT_DEFAULT.copy()
+        return {
+            **_SENTIMENT_DEFAULT,
+            "interpretation": "AI sentiment analysis is unavailable right now (LLM request failed).",
+            "ai_available": True,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -340,10 +351,15 @@ _PIPELINE_DEFAULT = {
 
 def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
     if not _has_any_llm():
-        return _PIPELINE_DEFAULT.copy()
+        return {
+            **_PIPELINE_DEFAULT,
+            "summary": "AI pipeline summary is not configured on this deployment (no LLM API key set).",
+            "ai_available": False,
+        }
 
     if trials_df is None or trials_df.empty:
-        return {**_PIPELINE_DEFAULT, "summary": "No active trials found in the pipeline."}
+        return {**_PIPELINE_DEFAULT, "summary": "No active trials found in the pipeline.",
+                "ai_available": True}
 
     active = trials_df[
         trials_df.get("status", pd.Series(dtype=str)).str.upper().isin(
@@ -374,10 +390,15 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
             "key_risks":            result.get("key_risks", []),
             "upcoming_catalysts":   result.get("upcoming_catalysts", []),
             "ai_generated":         True,
+            "ai_available":         True,
         }
     except Exception as exc:
         logger.error("summarize_pipeline(%s): %s", company_name, _safe_err(exc))
-        return _PIPELINE_DEFAULT.copy()
+        return {
+            **_PIPELINE_DEFAULT,
+            "summary": "AI pipeline summary is unavailable right now (LLM request failed).",
+            "ai_available": True,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +407,11 @@ def summarize_pipeline(trials_df: pd.DataFrame, company_name: str) -> dict:
 
 _RESEARCH_DEFAULT: dict[str, Any] = {
     "programs":        [],
-    "pipeline_summary": "AI pipeline research unavailable — set ANTHROPIC_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY.",
+    "pipeline_summary": "AI pipeline research is not configured on this deployment.",
     "hk_china_angle":  "",
     "data_note":       "",
     "ai_generated":    False,
+    "ai_available":    False,
 }
 
 
@@ -399,7 +421,11 @@ def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
     to Gemini 2.0 Flash (free tier). Returns ALL programs — owned, in-licensed, partnered.
     """
     if not _has_any_llm():
-        return _RESEARCH_DEFAULT.copy()
+        return {
+            **_RESEARCH_DEFAULT,
+            "pipeline_summary": "AI pipeline research is not configured on this deployment. "
+                                "It requires an LLM API key (Anthropic, Groq, OpenRouter, or Gemini).",
+        }
 
     user_prompt = (
         f"Company: {company_name}\n"
@@ -419,10 +445,12 @@ def research_full_pipeline(ticker: str, company_name: str) -> dict[str, Any]:
             "hk_china_angle":   result.get("hk_china_angle", ""),
             "data_note":        result.get("data_note", ""),
             "ai_generated":     True,
+            "ai_available":     True,
         }
     except Exception as exc:
         safe = _safe_err(exc)
         logger.error("research_full_pipeline(%s): %s", ticker, safe)
         result = _RESEARCH_DEFAULT.copy()
-        result["pipeline_summary"] = f"AI research failed: {safe}"
+        result["ai_available"] = True  # a key is set; the request itself failed
+        result["pipeline_summary"] = f"AI research request failed: {safe}"
         return result

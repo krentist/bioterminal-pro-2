@@ -1,7 +1,8 @@
 export type AppTab =
-  | 'overview' | 'fundamentals' | 'pipeline' | 'rnpv' | 'dcf'
+  | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
-  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting'
+  | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership' | 'peers'
+  | 'competition' | 'crossborder' | 'notes' | 'privateco'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -37,6 +38,16 @@ export interface Fundamentals {
   description: string | null;
   name: string | null;
   sector: string | null;
+  // Cash runway (clinical-stage biotech's key survival metric)
+  cash?: number | null;
+  freeCashflow?: number | null;
+  operatingCashflow?: number | null;
+  annualBurn?: number | null;
+  runwayYears?: number | null;
+  cashGenerating?: boolean | null;
+  burnBasis?: 'freeCashflow' | 'operatingCashflow' | null;
+  source?: string | null;
+  asOf?: string | null;
 }
 
 export interface Trial {
@@ -50,6 +61,16 @@ export interface Trial {
   conditions?: string[];
   interventions?: string[];
   prob_approval?: number | null;
+  probApproval?: number | null;
+  sponsor?: string | null;
+  isLeadSponsor?: boolean;
+  // Trial-level depth (Phase L)
+  enrollmentType?: string | null;      // ACTUAL | ESTIMATED
+  primaryEndpoint?: string | null;
+  comparator?: string | null;
+  hasComparator?: boolean;
+  primaryPurpose?: string | null;
+  primaryCompletionDate?: string | null;
 }
 
 export interface NewsItem {
@@ -66,10 +87,20 @@ export interface ConfidenceFactor {
   weight: number;
 }
 
+export interface MLSignal {
+  signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  bullProb: number;
+  confidence: number;
+  trainedOn: number;
+  oosAccuracy?: number | null;
+  oosSamples?: number;
+}
+
 export interface ConfidenceData {
   score: number;
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   factors: ConfidenceFactor[];
+  mlSignal?: MLSignal | null;
   newsImpact: {
     keyEvent: string | null;
     recentCount: number;
@@ -77,7 +108,10 @@ export interface ConfidenceData {
     interpretation?: string | null;
     keyEvents?: string[];
     ai_generated?: boolean;
+    ai_available?: boolean;
   } | null;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 export interface Scenario {
@@ -98,6 +132,8 @@ export interface ScenariosData {
     percentile75: number;
     percentile95: number;
   } | null;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 export interface SearchResult {
@@ -129,6 +165,13 @@ export interface DCFData {
   rnpvPerShare?: number | null;
   pipelineDiscount?: number | null;
   rnpvDetail?: RNPVAsset[];
+  trialsFound?: number;
+  programsValued?: number;
+  sponsorMatched?: boolean;
+  peakSalesAssumption?: number;
+  assumptionNote?: string;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── rNPV standalone ──────────────────────────────────────────────────────────
@@ -142,6 +185,13 @@ export interface RNPVData {
   rnpvPerShare: number | null;
   pipelineDiscount: number | null;
   rnpvDetail: RNPVAsset[];
+  trialsFound?: number;
+  programsValued?: number;
+  sponsorMatched?: boolean;
+  peakSalesAssumption?: number;
+  assumptionNote?: string;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Earnings ─────────────────────────────────────────────────────────────────
@@ -197,6 +247,8 @@ export interface RiskData {
   ticker: string;
   summary: RiskSummary;
   factors: RiskFactor[];
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Backtest ──────────────────────────────────────────────────────────────────
@@ -222,11 +274,13 @@ export interface BacktestMetrics {
   sharpe_ratio: number;
   max_drawdown_pct: number;
   bh_return_pct: number;
-  alpha_pct: number;
+  alpha_pct: number | null;
   n_trades: number;
   win_rate_pct: number;
   avg_win_pct: number;
   avg_loss_pct: number;
+  in_sample?: boolean;
+  note?: string;
 }
 
 export interface BacktestData {
@@ -235,6 +289,8 @@ export interface BacktestData {
   metrics: BacktestMetrics;
   equityCurve: EquityPoint[];
   trades: Trade[];
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Screener ──────────────────────────────────────────────────────────────────
@@ -278,6 +334,70 @@ export interface FlowEntry {
   snapshot_date: string;
 }
 
+// ── Catalyst calendar ─────────────────────────────────────────────────────────
+
+export interface Catalyst {
+  nctId: string;
+  title: string;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  date: string | null;
+  daysAway: number | null;
+  sponsor: string | null;
+  isLeadSponsor: boolean;
+  probApproval: number | null;
+  source_url: string | null;
+}
+
+export interface CatalystsData {
+  catalysts: Catalyst[];
+  withinDays: number;
+}
+
+// ── Ownership & short interest ────────────────────────────────────────────────
+
+export interface InstitutionalHolder {
+  holder: string;
+  pctHeld: number | null;
+  shares: number | null;
+  value: number | null;
+  pctChange: number | null;
+  dateReported: string | null;
+}
+
+export interface OwnershipData {
+  heldPctInstitutions: number | null;
+  heldPctInsiders: number | null;
+  shortPctOfFloat: number | null;
+  sharesShort: number | null;
+  sharesShortPriorMonth: number | null;
+  shortInterestChangePct: number | null;
+  daysToCover: number | null;
+  dateShortInterest: string | null;
+  floatShares: number | null;
+  sharesOutstanding: number | null;
+  topInstitutions: InstitutionalHolder[];
+}
+
+// ── Peer comparables ──────────────────────────────────────────────────────────
+
+export interface PeerRow {
+  ticker: string;
+  name: string;
+  marketCap: number | null;
+  price: number | null;
+  currency: string;
+  evToRevenue: number | null;
+  psRatio: number | null;
+  revenueGrowth: number | null;
+  grossMargin: number | null;
+  profitMargin: number | null;
+  cash: number | null;
+  targetUpside: number | null;
+  isSubject: boolean;
+}
+
 // ── Pipeline research (AI-powered) ───────────────────────────────────────────
 
 export interface PipelineProgram {
@@ -318,8 +438,162 @@ export interface PipelineResearch {
   hk_china_angle:   string;
   data_note:        string;
   ai_generated:     boolean;
+  ai_available?:    boolean;
   ticker:           string;
   company_name:     string;
+}
+
+// ── Private company entity model (Phase K) ────────────────────────────────────
+
+export interface PrivateCompany {
+  id: string;
+  name: string;
+  aliases: string[];
+  listingStatus: 'private' | 'pre_ipo' | 'public';
+  ctSponsorName: string | null;
+  linkedTicker: string | null;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompanyProgram {
+  title: string;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  enrollment: number | null;
+}
+
+export interface CompanyRnpvAsset {
+  name: string;
+  phase: string | null;
+  probApproval: number;
+  peakSales: number | null;
+  rnpv: number | null;
+  netRnpv: number | null;
+}
+
+export interface FundingRound {
+  id: string;
+  date: string | null;
+  roundType: string | null;
+  amountUsd: number | null;
+  postMoneyUsd: number | null;
+  leadInvestor: string | null;
+  source: string | null;
+  sourceUrl: string | null;
+}
+
+export interface CompanyNote {
+  id: string;
+  createdAt: string;
+  source: string | null;
+  text: string;
+}
+
+export interface CompanyView {
+  company: PrivateCompany;
+  listingStatus: string;
+  pipeline: {
+    programs: CompanyProgram[];
+    sponsorMatched: boolean;
+    trialsFound: number;
+    source: string;
+  };
+  valuation: {
+    valuationMethod: 'rNPV';
+    rnpvTotal: number;
+    programs: CompanyRnpvAsset[];
+    assumptions: { defaultPeakSalesUsd: number; discountRate: number | null; note: string };
+    licensingComps: { basis: string; low: number; mid: number; high: number } | null;
+  };
+  fundingComps: {
+    rounds: FundingRound[];
+    impliedByRnpv: {
+      lastPostMoneyUsd: number;
+      asOf: string | null;
+      rnpvTotal: number;
+      rnpvVsPostMoney: number | null;
+      source: string | null;
+      sourceUrl: string | null;
+    } | null;
+  };
+  notes: CompanyNote[];
+  sources: { field: string; source: string; url: string | null }[];
+}
+
+// ── Compliance wall: private notes + restricted list (Phase J) ────────────────
+
+export interface NoteEntry {
+  id: string;
+  createdAt: string;
+  subject: string;
+  subjectTicker: string | null;
+  source: string | null;
+  isPublicSubject: boolean;
+  isMaterialNonpublic: boolean;
+  restricted: boolean;
+}
+
+export interface NoteCreateResult {
+  id: string;
+  subject: string;
+  subjectTicker: string | null;
+  restrictedTriggered: boolean;
+}
+
+export interface RestrictedEntry {
+  ticker: string;
+  reason: string;
+  createdAt: string;
+}
+
+// ── Competitive landscape (Phase L) ───────────────────────────────────────────
+
+export interface Competitor {
+  sponsor: string;
+  nctId: string | null;
+  title: string | null;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  probApproval: number | null;
+  source_url: string | null;
+}
+
+export interface CompetitionData {
+  indication: string | null;
+  leadPhase: string | null;
+  leadProgram?: { title: string | null; nctId: string | null };
+  competitorCount?: number;
+  competitors: Competitor[];
+  note?: string;
+  source?: string;
+  source_url?: string;
+}
+
+// ── Cross-border A/H/US (Phase M) ─────────────────────────────────────────────
+
+export interface CrossBorderLeg {
+  exchange: 'CN' | 'HK' | 'US';
+  ticker: string;
+  currency: string;
+  priceLocal: number | null;
+  pricePerShareUsd: number | null;
+  premiumVsRefPct: number | null;
+  adsRatio?: number;
+}
+
+export interface CrossBorderData {
+  ticker: string;
+  cross_border: boolean;
+  name?: string;
+  referenceExchange?: 'CN' | 'HK' | 'US' | null;
+  usdhkd_rate?: number;
+  usdcny_rate?: number;
+  legs?: CrossBorderLeg[];
+  listedExchanges?: string[];
 }
 
 // ── Dual listing ──────────────────────────────────────────────────────────────

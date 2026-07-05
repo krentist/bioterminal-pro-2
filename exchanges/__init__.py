@@ -10,11 +10,11 @@ Currently supported regions
 ----------------------------
 US  – USExchangeAdapter   (yfinance + ClinicalTrials.gov)
 HK  – HKExchangeAdapter   (yfinance; CCASS / HKEXnews stubs)
+CN  – CNExchangeAdapter   (yfinance A-shares .SS/.SZ; ClinicalTrials.gov by name)
 
 Planned (not yet implemented)
 ------------------------------
 # from .eu import EUExchangeAdapter
-# from .cn import CNExchangeAdapter
 # from .jp import JPExchangeAdapter
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 from .base import BaseExchangeAdapter
 from .us import USExchangeAdapter
 from .hk import HKExchangeAdapter
+from .cn import CNExchangeAdapter
 
 # Extend this set as more tickers are confirmed to be HK-listed.
 _KNOWN_HK = {
@@ -45,10 +46,11 @@ def get_exchange_adapter(ticker: str) -> BaseExchangeAdapter:
     1. Explicit ".HK" suffix              → HKExchangeAdapter
     2. Pure numeric string (≤ 5 digits)   → HKExchangeAdapter (bare HK code)
     3. Known-HK set membership            → HKExchangeAdapter
-    4. Future: ".SS" / ".SZ"              → CNExchangeAdapter  (TODO)
-    5. Future: ".T"                        → JPExchangeAdapter  (TODO)
-    6. Future: ".L" / ".PA" / ".DE"       → EUExchangeAdapter  (TODO)
-    7. Default                             → USExchangeAdapter
+    4. ".SS" / ".SZ" suffix               → CNExchangeAdapter
+    5. Pure numeric string (6 digits)     → CNExchangeAdapter (bare A-share code)
+    6. Future: ".T"                        → JPExchangeAdapter  (TODO)
+    7. Future: ".L" / ".PA" / ".DE"       → EUExchangeAdapter  (TODO)
+    8. Default                             → USExchangeAdapter
     """
     t = ticker.strip().upper()
 
@@ -61,7 +63,12 @@ def get_exchange_adapter(ticker: str) -> BaseExchangeAdapter:
     if t in _KNOWN_HK:
         return HKExchangeAdapter()
 
-    # TODO: elif t.endswith(".SS") or t.endswith(".SZ"): return CNExchangeAdapter()
+    if t.endswith(".SS") or t.endswith(".SZ"):
+        return CNExchangeAdapter()
+
+    if t.isdigit() and len(t) == 6:   # bare A-share code (HK codes are ≤5 digits)
+        return CNExchangeAdapter()
+
     # TODO: elif t.endswith(".T"):                        return JPExchangeAdapter()
     # TODO: elif t.endswith((".L", ".PA", ".DE", ".AS")): return EUExchangeAdapter()
 
@@ -72,5 +79,6 @@ __all__ = [
     "BaseExchangeAdapter",
     "USExchangeAdapter",
     "HKExchangeAdapter",
+    "CNExchangeAdapter",
     "get_exchange_adapter",
 ]

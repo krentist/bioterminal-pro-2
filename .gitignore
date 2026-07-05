@@ -11,6 +11,16 @@ build/
 usage_log.jsonl
 watchlist.json
 
+# Compliance wall — private notes / restricted list / audit log (never commit)
+compliance.db
+compliance.db-wal
+compliance.db-shm
+
+# Private company entity store (user data — never commit)
+entities.db
+entities.db-wal
+entities.db-shm
+
 # Old UI backup (keep locally, not in repo)
 assets-old/
 index-old.html

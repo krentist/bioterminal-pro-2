@@ -17,9 +17,10 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
   const [data,    setData]    = useState<Fundamentals | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+  const [descExpanded, setDescExpanded] = useState(false);
 
   useEffect(() => {
-    setLoading(true); setError(null); setData(null);
+    setLoading(true); setError(null); setData(null); setDescExpanded(false);
     fetchFundamentals(ticker)
       .then(setData)
       .catch(() => setError('Failed to load fundamentals'))
@@ -50,13 +51,71 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
     ['Analyst Target', data.targetPrice != null ? fmt(data.targetPrice, s) : '—'],
   ] as [string, string][];
 
+  // Runway framing: <1y is critical, <2y is a watch-item, otherwise comfortable.
+  const runway = data.runwayYears;
+  const runwayColor =
+    runway == null ? 'text-ink'
+    : runway < 1 ? 'text-down'
+    : runway < 2 ? 'text-amber-400'
+    : 'text-up';
+  const showRunwayCard =
+    data.cash != null || data.annualBurn != null || data.cashGenerating != null;
+
   return (
     <div className="space-y-4 max-w-3xl">
       {/* Company header */}
-      {(data.name || data.sector) && (
+      {(data.name || data.sector || data.source) && (
         <div className="border-b border-line pb-3">
           {data.name   && <p className="text-[13px] font-medium text-ink">{data.name}</p>}
           {data.sector && <p className="text-[11px] text-dim mt-0.5">{data.sector}</p>}
+          {(data.source || data.asOf) && (
+            <p className="text-[9px] text-dim mt-1">
+              {data.source ?? 'Source'}{data.asOf ? ` · as of ${data.asOf.slice(0, 10)}` : ''}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Cash runway — the headline biotech survival metric */}
+      {showRunwayCard && (
+        <div className="border border-line rounded-lg bg-surface">
+          <div className="px-3 py-2 border-b border-line flex items-center justify-between">
+            <span className="text-[9px] uppercase tracking-widest text-dim font-semibold">Cash Runway</span>
+            {data.burnBasis && (
+              <span className="text-[9px] text-dim">
+                burn from {data.burnBasis === 'freeCashflow' ? 'free cash flow' : 'operating cash flow'}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 divide-x divide-line">
+            <div className="px-3 py-2.5">
+              <p className="text-[9px] text-dim uppercase tracking-wider">Cash</p>
+              <p className="text-base font-mono font-semibold text-ink mt-0.5">{fmtBig(data.cash, s)}</p>
+            </div>
+            <div className="px-3 py-2.5">
+              <p className="text-[9px] text-dim uppercase tracking-wider">Annual Burn</p>
+              <p className="text-base font-mono font-semibold text-ink mt-0.5">
+                {data.cashGenerating ? '—' : data.annualBurn != null ? fmtBig(data.annualBurn, s) : '—'}
+              </p>
+            </div>
+            <div className="px-3 py-2.5">
+              <p className="text-[9px] text-dim uppercase tracking-wider">Runway</p>
+              <p className={`text-base font-mono font-semibold mt-0.5 ${runwayColor}`}>
+                {data.cashGenerating
+                  ? 'Cash-flow +'
+                  : runway != null
+                    ? `${runway.toFixed(1)} yr`
+                    : '—'}
+              </p>
+            </div>
+          </div>
+          <p className="px-3 pb-2 text-[9px] text-dim leading-relaxed">
+            {data.cashGenerating
+              ? 'Company generated positive cash flow over the trailing period — not currently burning cash.'
+              : runway != null
+                ? 'Cash ÷ trailing annual cash burn. A rough survival estimate before a likely capital raise; does not include undrawn facilities, milestone payments, or pipeline financing.'
+                : 'Insufficient cash-flow data to estimate runway for this ticker.'}
+          </p>
         </div>
       )}
 
@@ -82,7 +141,16 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
       {data.description && (
         <div className="pt-1">
           <p className="text-[10px] text-dim uppercase tracking-wider mb-1.5">Business Description</p>
-          <p className="text-[11px] text-dim leading-relaxed line-clamp-4">{data.description}</p>
+          <p className={`text-[11px] text-dim leading-relaxed ${descExpanded ? '' : 'line-clamp-4'}`}>
+            {data.description}
+          </p>
+          <button
+            type="button"
+            onClick={() => setDescExpanded((v) => !v)}
+            className="text-[10px] text-ink/70 hover:text-ink mt-1 underline underline-offset-2"
+          >
+            {descExpanded ? 'Show less' : 'Show more'}
+          </button>
         </div>
       )}
     </div>

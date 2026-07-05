@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchScenarios } from '@/api';
 import { Skeleton } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { fmt } from '@/lib/utils';
 import type { ScenariosData, Scenario } from '@/types';
 
@@ -54,6 +55,7 @@ export function ScenariosTab({ ticker }: { ticker: string }) {
     </div>
   );
   if (error || !data) return <p className="text-sm text-dim">{error ?? 'No scenario data'}</p>;
+  if (data.restricted) return <RestrictedPanel reason={data.restrictedReason} />;
 
   const sym = data.currencySymbol || '$';
   const mc  = data.monteCarlo;

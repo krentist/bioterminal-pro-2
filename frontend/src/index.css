@@ -13,18 +13,20 @@
   --up:       #1a7f37;
   --down:     #cf222e;
   --hi:       #0969da;
+  --canvas:   #f6f8fa;
 }
 
 .dark {
-  --base:     #0a0a0a;
-  --surface:  #111111;
-  --elevated: #1a1a1a;
-  --line:     #2a2a2a;
-  --ink:      #e6edf3;
-  --dim:      #8b949e;
+  --base:     #121212;
+  --surface:  #1a1a1a;
+  --elevated: #232323;
+  --line:     #2e2e2e;
+  --ink:      #eaeaea;
+  --dim:      #8a8a8a;
   --up:       #3fb950;
   --down:     #f85149;
   --hi:       #2f81f7;
+  --canvas:   #303030;
 }
 
 /* ── Base reset ── */
@@ -104,4 +106,77 @@ input[type="range"].dcf-slider::-moz-range-thumb {
   background: var(--hi);
   border: none;
   cursor: pointer;
+}
+
+/* ── Landing hero animations ── */
+@keyframes landing-fade-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.landing-fade-in {
+  animation: landing-fade-in 0.5s ease-out both;
+}
+
+/* ── Live status dot ── */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+
+.live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hi);
+  animation: live-pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+/* ── Subtle landing grid background ── */
+.dark .landing-fade-in::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ── Tab bar active indicator transition ── */
+.tab-active-bar {
+  transition: transform 0.15s ease;
+}
+
+/* ── Quick-pick card hover lift ── */
+button:has(.live-dot) {
+  /* handled via tailwind group */
+}
+
+/* ── Window desktop canvas ── */
+.desktop-grid {
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+.dark .desktop-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+/* ── Floating window shell ── */
+.win-shell {
+  transition: box-shadow 0.1s ease;
+}
+.win-shell:hover {
+  box-shadow: 0 0 0 1px var(--hi) inset;
 }

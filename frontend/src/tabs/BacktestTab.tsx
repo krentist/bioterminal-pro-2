@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchBacktest } from '@/api';
 import { SkeletonList } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { fmtPct } from '@/lib/utils';
 import type { BacktestData, EquityPoint } from '@/types';
 
@@ -109,9 +110,20 @@ export function BacktestTab({ ticker }: { ticker: string }) {
 
       {loading && <SkeletonList count={3} className="h-12" />}
       {error   && <p className="text-sm text-dim">{error}</p>}
+      {!loading && !error && data?.restricted && <RestrictedPanel reason={data.restrictedReason} />}
 
-      {!loading && !error && data && (
+      {!loading && !error && data && !data.restricted && (
         <>
+          {/* Honest caveat: no-trade result or in-sample disclaimer */}
+          {data.metrics.note && (
+            <div className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${
+              data.metrics.n_trades === 0
+                ? 'border-amber-500/30 bg-amber-500/10 text-amber-300/90'
+                : 'border-line bg-elevated text-dim'}`}>
+              {data.metrics.note}
+            </div>
+          )}
+
           {/* Equity curve */}
           {data.equityCurve?.length > 1 && <EquityChart points={data.equityCurve} />}
 
@@ -136,9 +148,9 @@ export function BacktestTab({ ticker }: { ticker: string }) {
               />
               <MetricRow
                 label="Alpha"
-                value={data.metrics.alpha_pct != null ? fmtPct(data.metrics.alpha_pct) : '—'}
-                color={data.metrics.alpha_pct >= 0 ? 'text-up' : 'text-down'}
-                tooltip="Strategy return minus buy-and-hold return. Positive = strategy added value."
+                value={data.metrics.alpha_pct != null ? fmtPct(data.metrics.alpha_pct) : 'n/a'}
+                color={data.metrics.alpha_pct == null ? 'text-dim' : data.metrics.alpha_pct >= 0 ? 'text-up' : 'text-down'}
+                tooltip="Strategy return minus buy-and-hold return. Positive = strategy added value. Shown as n/a when the strategy made no trades."
               />
             </div>
             <div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchConfidence } from '@/api';
 import { Skeleton } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import type { ConfidenceData, ConfidenceFactor } from '@/types';
 
 function SignalBadge({ signal }: { signal: string }) {
@@ -60,6 +61,7 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
     </div>
   );
   if (error || !data) return <p className="text-sm text-dim">{error ?? 'No data'}</p>;
+  if (data.restricted) return <RestrictedPanel reason={data.restrictedReason} />;
 
   const scoreColor = data.score >= 60 ? 'text-up' : data.score <= 40 ? 'text-down' : 'text-dim';
   const barColor   = data.score >= 60 ? 'bg-up'   : data.score <= 40 ? 'bg-down'   : 'bg-hi';
@@ -87,6 +89,37 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
           </div>
         </div>
       </div>
+
+      {/* ML model card — the actual RandomForest, with its honest out-of-sample read */}
+      {data.mlSignal && (
+        <div className="border border-line rounded bg-surface px-3 py-2.5 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-dim uppercase tracking-wider">RandomForest model</p>
+            <SignalBadge signal={data.mlSignal.signal} />
+          </div>
+          <div className="flex items-center gap-4 text-[11px] font-mono">
+            <span className="text-dim">P(outperform) <span className="text-ink">{(data.mlSignal.bullProb * 100).toFixed(0)}%</span></span>
+            <span className="text-dim">trained on <span className="text-ink">{data.mlSignal.trainedOn}</span></span>
+          </div>
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="text-dim">Out-of-sample accuracy:</span>
+            {data.mlSignal.oosAccuracy != null ? (
+              <span className={`font-mono font-semibold ${
+                data.mlSignal.oosAccuracy >= 0.58 ? 'text-up'
+                : data.mlSignal.oosAccuracy >= 0.52 ? 'text-ink' : 'text-down'}`}>
+                {(data.mlSignal.oosAccuracy * 100).toFixed(1)}%
+                <span className="text-dim font-normal"> on {data.mlSignal.oosSamples} held-out days</span>
+              </span>
+            ) : <span className="text-dim">not evaluated</span>}
+          </div>
+          <p className="text-[10px] text-dim leading-relaxed">
+            Price-only technical momentum classifier, retrained per ticker. Accuracy near 50%
+            means the signal has little predictive edge on recent data — treat it as one input,
+            not a forecast. The headline score above is a separate weighted heuristic and is not
+            driven by this model.
+          </p>
+        </div>
+      )}
 
       {/* Factors table */}
       {data.factors?.length > 0 && (
@@ -117,9 +150,16 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
         <div className="border border-line rounded bg-surface px-3 py-2.5 space-y-1.5">
           <div className="flex items-center justify-between">
             <p className="text-[10px] text-dim uppercase tracking-wider">News Sentiment</p>
-            {ni.ai_generated && (
-              <span className="text-[9px] text-dim bg-elevated border border-line px-1.5 py-0.5 rounded">AI</span>
-            )}
+            {ni.ai_generated ? (
+              <span className="text-[9px] text-hi bg-hi/10 border border-hi/30 px-1.5 py-0.5 rounded">AI</span>
+            ) : ni.ai_available === false ? (
+              <span
+                title="No LLM API key set on the server — headline sentiment is not analysed."
+                className="text-[9px] text-dim bg-elevated border border-line px-1.5 py-0.5 rounded"
+              >
+                AI off
+              </span>
+            ) : null}
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <span className="text-dim">{ni.recentCount} recent articles</span>

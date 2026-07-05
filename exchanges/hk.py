@@ -10,12 +10,14 @@ Data sources:
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
+import time
 from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -74,17 +76,27 @@ def _ccass_code(ticker: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _load_hkex_stock_ids() -> None:
-    """Populate _HKEX_STOCK_ID_CACHE from the active-stocks JSON if empty."""
+    """Populate _HKEX_STOCK_ID_CACHE from the active-stocks JSON if empty.
+
+    Retries up to 3 times with exponential back-off — the www1 endpoint can be
+    slow from outside HK, and a single timeout would otherwise leave every
+    subsequent filings request returning empty for the lifetime of the process.
+    """
     global _HKEX_STOCK_ID_CACHE
     if _HKEX_STOCK_ID_CACHE:
         return
-    try:
-        r = requests.get(_HKEX_STOCKS_JSON_URL, headers=_HEADERS, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        _HKEX_STOCK_ID_CACHE = {item["c"]: item["i"] for item in data if item.get("c") and item.get("i")}
-    except Exception as exc:
-        logger.error("hkex_stock_ids: %s", exc)
+    for attempt in range(3):
+        try:
+            r = requests.get(_HKEX_STOCKS_JSON_URL, headers=_HEADERS, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+            _HKEX_STOCK_ID_CACHE = {item["c"]: item["i"] for item in data if item.get("c") and item.get("i")}
+            return
+        except Exception as exc:
+            logger.warning("hkex_stock_ids attempt %d/3: %s", attempt + 1, exc)
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    logger.error("hkex_stock_ids: all retries exhausted — filings will be unavailable")
 
 
 def _fetch_hkex_filings(ticker: str, limit: int = 50) -> pd.DataFrame:
@@ -147,12 +159,19 @@ def _fetch_hkex_filings(ticker: str, limit: int = 50) -> pd.DataFrame:
     rows = []
     for item in items[:limit]:
         date_str = _parse_hk_date(item.get("DATE_TIME", ""))
-        title = item.get("TITLE", "").strip()
+        title = html.unescape(item.get("TITLE", "")).strip()
         if not title:
             continue
-        # SHORT_TEXT: "Announcements and Notices - [Type]<br/>" → extract "Type"
-        short_text = re.sub(r"<[^>]+>", "", item.get("SHORT_TEXT", "")).strip()
-        filing_type = short_text.split(" - ", 1)[-1].strip(" []") if " - " in short_text else short_text
+        # SHORT_TEXT: "Announcements and Notices - [Type]<br/> ... More" → extract "Type".
+        # Strip tags, decode HTML entities (&#x2f; → /), drop the CT.gov "...More"
+        # expander tail, collapse whitespace, and cap length so the field stays a label.
+        short_text = html.unescape(re.sub(r"<[^>]+>", " ", item.get("SHORT_TEXT", "")))
+        short_text = re.split(r"\.\.\.\s*More\b", short_text)[0]
+        short_text = re.sub(r"\s+", " ", short_text).strip()
+        filing_type = short_text.split(" - ", 1)[-1] if " - " in short_text else short_text
+        filing_type = filing_type.strip(" []").strip()
+        if len(filing_type) > 80:
+            filing_type = filing_type[:79].rstrip() + "…"
         file_link = item.get("FILE_LINK", "")
         url = (_HKEX_API_BASE + file_link) if file_link else ""
         rows.append({"date": date_str, "title": title, "type": filing_type, "url": url})
@@ -165,9 +184,17 @@ def _fetch_hkex_filings(ticker: str, limit: int = 50) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _end_of_month_dates(months_back: int = 12) -> list[datetime]:
-    today = datetime.utcnow()
+    """Return end-of-month dates for the past N complete months.
+
+    CCASS publishes shareholding data with a 1-2 business day lag.  If today
+    is within the first 3 days of a new month the previous month-end may not
+    be available yet, so we start from 2 months ago to avoid timeout-waiting
+    for unpublished data.
+    """
+    today = datetime.now(timezone.utc)
+    start_offset = 2 if today.day <= 3 else 1
     dates = []
-    for m in range(1, months_back + 1):
+    for m in range(start_offset, months_back + start_offset):
         month = today.month - m
         year = today.year
         while month <= 0:
@@ -200,7 +227,7 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 12) -> pd.DataFrame:
         "__EVENTARGUMENT": "",
         "__VIEWSTATE": "",
         "__VIEWSTATEGENERATOR": "A7B2BBE2",
-        "today": datetime.utcnow().strftime("%Y%m%d"),
+        "today": datetime.now(timezone.utc).strftime("%Y%m%d"),
         "sortBy": "shareholding",
         "sortDirection": "desc",
         "originalShareholdingDate": "",
@@ -218,16 +245,22 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 12) -> pd.DataFrame:
             "txtStockCode": code_5d,
         }
         date_str = date.strftime("%Y-%m-%d")
-        try:
-            resp = requests.post(
-                _CCASS_URL,
-                data=form_data,
-                headers={**_HEADERS, "Referer": _CCASS_URL},
-                timeout=20,
-            )
-            resp.raise_for_status()
-        except Exception as exc:
-            logger.error("ccass POST(%s %s): %s", code_5d, date_str, exc)
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    _CCASS_URL,
+                    data=form_data,
+                    headers={**_HEADERS, "Referer": _CCASS_URL},
+                    timeout=25,
+                )
+                resp.raise_for_status()
+                break
+            except Exception as exc:
+                logger.warning("ccass POST(%s %s) attempt %d/2: %s", code_5d, date_str, attempt + 1, exc)
+                if attempt == 0:
+                    time.sleep(1)
+        if resp is None or not resp.ok:
             return pd.DataFrame()
 
         soup = BeautifulSoup(resp.content, "lxml")
@@ -271,8 +304,9 @@ def _fetch_ccass_flow(ticker: str, months_back: int = 12) -> pd.DataFrame:
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
     dfs: list[pd.DataFrame] = []
-    # Max 4 workers — avoids overwhelming HKEX rate limits while still parallelising
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    # Max 3 workers — HKEX servers are sensitive to rapid concurrent POSTs from
+    # outside HK; 3 keeps fetch time reasonable without triggering rate-limits.
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {pool.submit(_fetch_one, d): d for d in dates}
         for fut in as_completed(futures):
             try:

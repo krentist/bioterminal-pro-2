@@ -2,7 +2,10 @@ import type {
   Quote, Bar, Fundamentals, Trial, NewsItem,
   ConfidenceData, DCFData, ScenariosData, SearchResult,
   RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
-  Filing, FlowEntry, DualListingData,
+  Filing, FlowEntry, DualListingData, CatalystsData, OwnershipData, PeerRow,
+  CompetitionData, CrossBorderData,
+  NoteEntry, NoteCreateResult, RestrictedEntry,
+  PrivateCompany, CompanyView,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -17,6 +20,7 @@ export const fetchStock        = (t: string, range: string) =>
   get<{ bars: Bar[] }>(`/api/stock/${enc(t)}?range=${range}`);
 export const fetchFundamentals = (t: string) => get<Fundamentals>(`/api/fundamentals/${enc(t)}`);
 export const fetchTrials       = (t: string) => get<{ trials: Trial[] }>(`/api/trials/${enc(t)}`);
+export const fetchCatalysts    = (t: string) => get<CatalystsData>(`/api/catalysts/${enc(t)}`);
 export const fetchNews         = (t: string) => get<NewsItem[]>(`/api/news/${enc(t)}`);
 export const fetchConfidence   = (t: string) => get<ConfidenceData>(`/api/confidence/${enc(t)}`);
 export const fetchDCF          = (t: string) => get<DCFData>(`/api/dcf/${enc(t)}`);
@@ -52,6 +56,61 @@ export const fetchScreen       = (region: 'HK' | 'US') =>
 export const fetchFilings      = (t: string) => get<Filing[]>(`/api/filings/${enc(t)}`);
 export const fetchFlow         = (t: string) => get<FlowEntry[]>(`/api/flow/${enc(t)}`);
 export const fetchDualListing  = (t: string) => get<DualListingData>(`/api/dual-listing/${enc(t)}`);
+export const fetchOwnership    = (t: string) => get<OwnershipData>(`/api/ownership/${enc(t)}`);
+export const fetchCompetition  = (t: string) => get<CompetitionData>(`/api/competition/${enc(t)}`);
+export const fetchCrossBorder  = (t: string) => get<CrossBorderData>(`/api/cross-border/${enc(t)}`);
+
+// ── Compliance wall (Phase J) ──────────────────────────────────────────────────
+export const fetchNotes      = (subject?: string) =>
+  get<{ notes: NoteEntry[] }>(`/api/notes${subject ? `?subject=${enc(subject)}` : ''}`);
+export const fetchRestricted = () => get<{ restricted: RestrictedEntry[] }>('/api/restricted');
+
+export async function createNote(body: {
+  subject: string; text: string; source?: string; subjectTicker?: string;
+  isPublicSubject?: boolean; isMaterialNonpublic?: boolean;
+}): Promise<NoteCreateResult> {
+  const res = await fetch('/api/notes', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function liftRestriction(ticker: string): Promise<void> {
+  const res = await fetch(`/api/restricted/${enc(ticker)}/lift`, { method: 'POST' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+// ── Private company entity model (Phase K) ─────────────────────────────────────
+export const listCompanies = (q?: string) =>
+  get<{ companies: PrivateCompany[] }>(`/api/company${q ? `?q=${enc(q)}` : ''}`);
+export const getCompany    = (id: string) => get<CompanyView>(`/api/company/${enc(id)}`);
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export const createCompany = (body: {
+  name: string; ctSponsorName?: string; listingStatus?: string; description?: string;
+}) => post<PrivateCompany>('/api/company', body);
+
+export const addFunding = (id: string, body: {
+  date?: string; roundType?: string; amountUsd?: number; postMoneyUsd?: number;
+  leadInvestor?: string; source?: string; sourceUrl?: string;
+}) => post<{ id: string; companyId: string }>(`/api/company/${enc(id)}/funding`, body);
+
+export const addCompanyNote = (id: string, body: {
+  text: string; source?: string; isMaterialNonpublic?: boolean;
+}) => post<{ id: string }>(`/api/company/${enc(id)}/notes`, body);
+export const fetchPeers        = (t: string) => get<{ peers: PeerRow[] }>(`/api/peers/${enc(t)}`);
 export const fetchPipelineSummary = (t: string) =>
   get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(
     `/api/pipeline-summary/${enc(t)}`
