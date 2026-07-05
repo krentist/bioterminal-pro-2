@@ -46,6 +46,8 @@ export interface Fundamentals {
   runwayYears?: number | null;
   cashGenerating?: boolean | null;
   burnBasis?: 'freeCashflow' | 'operatingCashflow' | null;
+  source?: string | null;
+  asOf?: string | null;
 }
 
 export interface Trial {

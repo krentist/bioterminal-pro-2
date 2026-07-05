@@ -221,4 +221,5 @@ def get_cross_border_info(ticker: str) -> dict | None:
         "usdcny_rate":       round(usdcny, 4),
         "legs":              legs,
         "listedExchanges":   [l["exchange"] for l in legs],
+        "source":            "Yahoo Finance",
     }

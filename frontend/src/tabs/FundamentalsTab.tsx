@@ -64,10 +64,15 @@ export function FundamentalsTab({ ticker }: { ticker: string }) {
   return (
     <div className="space-y-4 max-w-3xl">
       {/* Company header */}
-      {(data.name || data.sector) && (
+      {(data.name || data.sector || data.source) && (
         <div className="border-b border-line pb-3">
           {data.name   && <p className="text-[13px] font-medium text-ink">{data.name}</p>}
           {data.sector && <p className="text-[11px] text-dim mt-0.5">{data.sector}</p>}
+          {(data.source || data.asOf) && (
+            <p className="text-[9px] text-dim mt-1">
+              {data.source ?? 'Source'}{data.asOf ? ` · as of ${data.asOf.slice(0, 10)}` : ''}
+            </p>
+          )}
         </div>
       )}
 

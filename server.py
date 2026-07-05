@@ -190,6 +190,17 @@ def _utc_iso_z() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _epoch_to_iso(ts) -> Optional[str]:
+    """Convert a unix-epoch timestamp (e.g. yfinance regularMarketTime) to ISO-8601 'Z',
+    or None if absent/invalid. Used for honest 'as of' provenance labels."""
+    if isinstance(ts, (int, float)) and ts > 0:
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, OverflowError, OSError):
+            return None
+    return None
+
+
 def _load_watchlist() -> list[str]:
     try:
         return json.loads(WATCHLIST_PATH.read_text())
@@ -302,6 +313,8 @@ def get_quote(ticker: str):
             "changePercent":  _safe(change_pct),
             "currency":       currency,
             "currencySymbol": _currency_symbol(currency),
+            "source":         "Yahoo Finance",
+            "asOf":           _epoch_to_iso(info.get("regularMarketTime")),
         }
     except Exception as exc:
         logger.error("quote(%s): %s", ticker, exc)
@@ -459,6 +472,8 @@ def get_fundamentals(ticker: str):
             "website":         info.get("website"),
             "employees":       info.get("fullTimeEmployees"),
             "exchange":        info.get("exchange"),
+            "source":          "Yahoo Finance",
+            "asOf":            _epoch_to_iso(info.get("regularMarketTime")),
         })
     except Exception as exc:
         logger.error("fundamentals(%s): %s", ticker, exc)
@@ -513,7 +528,12 @@ def get_trials(ticker: str):
             })
         # Order lead-sponsor trials first so the company's own pipeline is what's seen.
         trials.sort(key=lambda t: not t["isLeadSponsor"])
-        return _to_json_safe({"trials": trials})
+        return _to_json_safe({
+            "trials": trials,
+            "source": "ClinicalTrials.gov",
+            "source_url": "https://clinicaltrials.gov",
+            "retrievedAt": _utc_iso_z(),
+        })
     except Exception as exc:
         logger.error("trials(%s): %s", ticker, exc)
         return {"trials": []}

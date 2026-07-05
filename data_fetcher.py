@@ -220,6 +220,8 @@ def get_ownership(ticker: str) -> dict:
         "sharesOutstanding":      info.get("sharesOutstanding"),
         "topInstitutions":        top,
         "insiderTransactions":    insider_txns,
+        "source":                 "Yahoo Finance",
+        "retrievedAt":            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     with _OWNERSHIP_CACHE_LOCK:
