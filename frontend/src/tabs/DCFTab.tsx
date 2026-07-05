@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchDCF, postDCF } from '@/api';
 import { Skeleton } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { fmt } from '@/lib/utils';
 import type { DCFData } from '@/types';
 
@@ -131,6 +132,7 @@ export function DCFTab({ ticker }: { ticker: string }) {
   if (error || !result || !assumptions) return (
     <p className="text-sm text-dim">{error ?? 'No DCF data available'}</p>
   );
+  if (result.restricted) return <RestrictedPanel reason={result.restrictedReason} />;
 
   // The backend routes pre-revenue / loss-making companies to rNPV, because a DCF
   // built on assumed positive margins would be fictitious. Say so plainly rather

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchBacktest } from '@/api';
 import { SkeletonList } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { fmtPct } from '@/lib/utils';
 import type { BacktestData, EquityPoint } from '@/types';
 
@@ -109,8 +110,9 @@ export function BacktestTab({ ticker }: { ticker: string }) {
 
       {loading && <SkeletonList count={3} className="h-12" />}
       {error   && <p className="text-sm text-dim">{error}</p>}
+      {!loading && !error && data?.restricted && <RestrictedPanel reason={data.restrictedReason} />}
 
-      {!loading && !error && data && (
+      {!loading && !error && data && !data.restricted && (
         <>
           {/* Honest caveat: no-trade result or in-sample disclaimer */}
           {data.metrics.note && (

@@ -19,6 +19,7 @@ import { OwnershipTab }    from '@/tabs/OwnershipTab';
 import { PeersTab }        from '@/tabs/PeersTab';
 import { CompetitionTab }  from '@/tabs/CompetitionTab';
 import { CrossBorderTab }  from '@/tabs/CrossBorderTab';
+import { NotesTab }        from '@/tabs/NotesTab';
 import { NewsTab }         from '@/tabs/NewsTab';
 import { WatchlistTab }    from '@/tabs/WatchlistTab';
 
@@ -149,6 +150,12 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     defaultSize: { w: 560, h: 460 },
     render: ticker => <CrossBorderTab ticker={ticker} />,
   },
+  notes: {
+    label: 'Notes & Compliance',
+    description: 'Private research notes with an MNPI compliance wall and restricted list.',
+    defaultSize: { w: 480, h: 620 },
+    render: ticker => <NotesTab ticker={ticker} />,
+  },
   news: {
     label: 'News',
     description: 'Recent headlines with AI sentiment context.',
@@ -166,7 +173,8 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
 export const PANEL_ORDER: AppTab[] = [
   'overview', 'fundamentals', 'pipeline', 'catalysts', 'competition', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
-  'filings', 'ccas', 'duallisting', 'crossborder', 'ownership', 'peers', 'screener', 'watchlist',
+  'filings', 'ccas', 'duallisting', 'crossborder', 'ownership', 'peers', 'screener',
+  'notes', 'watchlist',
 ];
 
 export const DEFAULT_OPEN_PANELS: AppTab[] = ['overview', 'fundamentals', 'pipeline', 'news'];

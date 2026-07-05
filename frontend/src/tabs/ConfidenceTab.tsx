@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchConfidence } from '@/api';
 import { Skeleton } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import type { ConfidenceData, ConfidenceFactor } from '@/types';
 
 function SignalBadge({ signal }: { signal: string }) {
@@ -60,6 +61,7 @@ export function ConfidenceTab({ ticker }: { ticker: string }) {
     </div>
   );
   if (error || !data) return <p className="text-sm text-dim">{error ?? 'No data'}</p>;
+  if (data.restricted) return <RestrictedPanel reason={data.restrictedReason} />;
 
   const scoreColor = data.score >= 60 ? 'text-up' : data.score <= 40 ? 'text-down' : 'text-dim';
   const barColor   = data.score >= 60 ? 'bg-up'   : data.score <= 40 ? 'bg-down'   : 'bg-hi';

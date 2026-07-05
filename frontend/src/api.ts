@@ -4,6 +4,7 @@ import type {
   RNPVData, EarningsData, RiskData, BacktestData, ScreenerData,
   Filing, FlowEntry, DualListingData, CatalystsData, OwnershipData, PeerRow,
   CompetitionData, CrossBorderData,
+  NoteEntry, NoteCreateResult, RestrictedEntry,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -57,6 +58,29 @@ export const fetchDualListing  = (t: string) => get<DualListingData>(`/api/dual-
 export const fetchOwnership    = (t: string) => get<OwnershipData>(`/api/ownership/${enc(t)}`);
 export const fetchCompetition  = (t: string) => get<CompetitionData>(`/api/competition/${enc(t)}`);
 export const fetchCrossBorder  = (t: string) => get<CrossBorderData>(`/api/cross-border/${enc(t)}`);
+
+// ── Compliance wall (Phase J) ──────────────────────────────────────────────────
+export const fetchNotes      = (subject?: string) =>
+  get<{ notes: NoteEntry[] }>(`/api/notes${subject ? `?subject=${enc(subject)}` : ''}`);
+export const fetchRestricted = () => get<{ restricted: RestrictedEntry[] }>('/api/restricted');
+
+export async function createNote(body: {
+  subject: string; text: string; source?: string; subjectTicker?: string;
+  isPublicSubject?: boolean; isMaterialNonpublic?: boolean;
+}): Promise<NoteCreateResult> {
+  const res = await fetch('/api/notes', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function liftRestriction(ticker: string): Promise<void> {
+  const res = await fetch(`/api/restricted/${enc(ticker)}/lift`, { method: 'POST' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
 export const fetchPeers        = (t: string) => get<{ peers: PeerRow[] }>(`/api/peers/${enc(t)}`);
 export const fetchPipelineSummary = (t: string) =>
   get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(

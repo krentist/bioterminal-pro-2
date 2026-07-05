@@ -2,7 +2,7 @@ export type AppTab =
   | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
   | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership' | 'peers'
-  | 'competition' | 'crossborder'
+  | 'competition' | 'crossborder' | 'notes'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -108,6 +108,8 @@ export interface ConfidenceData {
     ai_generated?: boolean;
     ai_available?: boolean;
   } | null;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 export interface Scenario {
@@ -128,6 +130,8 @@ export interface ScenariosData {
     percentile75: number;
     percentile95: number;
   } | null;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 export interface SearchResult {
@@ -164,6 +168,8 @@ export interface DCFData {
   sponsorMatched?: boolean;
   peakSalesAssumption?: number;
   assumptionNote?: string;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── rNPV standalone ──────────────────────────────────────────────────────────
@@ -182,6 +188,8 @@ export interface RNPVData {
   sponsorMatched?: boolean;
   peakSalesAssumption?: number;
   assumptionNote?: string;
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Earnings ─────────────────────────────────────────────────────────────────
@@ -277,6 +285,8 @@ export interface BacktestData {
   metrics: BacktestMetrics;
   equityCurve: EquityPoint[];
   trades: Trade[];
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Screener ──────────────────────────────────────────────────────────────────
@@ -427,6 +437,32 @@ export interface PipelineResearch {
   ai_available?:    boolean;
   ticker:           string;
   company_name:     string;
+}
+
+// ── Compliance wall: private notes + restricted list (Phase J) ────────────────
+
+export interface NoteEntry {
+  id: string;
+  createdAt: string;
+  subject: string;
+  subjectTicker: string | null;
+  source: string | null;
+  isPublicSubject: boolean;
+  isMaterialNonpublic: boolean;
+  restricted: boolean;
+}
+
+export interface NoteCreateResult {
+  id: string;
+  subject: string;
+  subjectTicker: string | null;
+  restrictedTriggered: boolean;
+}
+
+export interface RestrictedEntry {
+  ticker: string;
+  reason: string;
+  createdAt: string;
 }
 
 // ── Competitive landscape (Phase L) ───────────────────────────────────────────

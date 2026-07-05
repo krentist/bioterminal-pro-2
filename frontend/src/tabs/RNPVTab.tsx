@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchRNPV } from '@/api';
 import { SkeletonGrid } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { fmtBig, fmtPctFrac } from '@/lib/utils';
 import type { RNPVData } from '@/types';
 
@@ -38,6 +39,7 @@ export function RNPVTab({ ticker }: { ticker: string }) {
   if (loading) return <SkeletonGrid count={4} className="h-16" />;
   if (error)   return <p className="text-sm text-dim">{error}</p>;
   if (!data)   return null;
+  if (data.restricted) return <RestrictedPanel reason={data.restrictedReason} />;
 
   const noTrials = !data.rnpvDetail || data.rnpvDetail.length === 0;
   const discountColor = data.pipelineDiscount == null ? 'text-ink'
