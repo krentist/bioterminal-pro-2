@@ -5,6 +5,7 @@ import type {
   Filing, FlowEntry, DualListingData, CatalystsData, OwnershipData, PeerRow,
   CompetitionData, CrossBorderData,
   NoteEntry, NoteCreateResult, RestrictedEntry,
+  PrivateCompany, CompanyView,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -81,6 +82,34 @@ export async function liftRestriction(ticker: string): Promise<void> {
   const res = await fetch(`/api/restricted/${enc(ticker)}/lift`, { method: 'POST' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
+
+// ── Private company entity model (Phase K) ─────────────────────────────────────
+export const listCompanies = (q?: string) =>
+  get<{ companies: PrivateCompany[] }>(`/api/company${q ? `?q=${enc(q)}` : ''}`);
+export const getCompany    = (id: string) => get<CompanyView>(`/api/company/${enc(id)}`);
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export const createCompany = (body: {
+  name: string; ctSponsorName?: string; listingStatus?: string; description?: string;
+}) => post<PrivateCompany>('/api/company', body);
+
+export const addFunding = (id: string, body: {
+  date?: string; roundType?: string; amountUsd?: number; postMoneyUsd?: number;
+  leadInvestor?: string; source?: string; sourceUrl?: string;
+}) => post<{ id: string; companyId: string }>(`/api/company/${enc(id)}/funding`, body);
+
+export const addCompanyNote = (id: string, body: {
+  text: string; source?: string; isMaterialNonpublic?: boolean;
+}) => post<{ id: string }>(`/api/company/${enc(id)}/notes`, body);
 export const fetchPeers        = (t: string) => get<{ peers: PeerRow[] }>(`/api/peers/${enc(t)}`);
 export const fetchPipelineSummary = (t: string) =>
   get<{ summary: string; key_risks: string[]; upcoming_catalysts: string[]; ai_generated: boolean }>(

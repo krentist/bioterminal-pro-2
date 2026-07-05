@@ -2,7 +2,7 @@ export type AppTab =
   | 'overview' | 'fundamentals' | 'pipeline' | 'catalysts' | 'rnpv' | 'dcf'
   | 'scenarios' | 'confidence'  | 'earnings' | 'risk' | 'backtest'
   | 'screener'  | 'filings'     | 'ccas'     | 'duallisting' | 'ownership' | 'peers'
-  | 'competition' | 'crossborder' | 'notes'
+  | 'competition' | 'crossborder' | 'notes' | 'privateco'
   | 'news'      | 'watchlist';
 
 export interface Bar {
@@ -437,6 +437,86 @@ export interface PipelineResearch {
   ai_available?:    boolean;
   ticker:           string;
   company_name:     string;
+}
+
+// ── Private company entity model (Phase K) ────────────────────────────────────
+
+export interface PrivateCompany {
+  id: string;
+  name: string;
+  aliases: string[];
+  listingStatus: 'private' | 'pre_ipo' | 'public';
+  ctSponsorName: string | null;
+  linkedTicker: string | null;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompanyProgram {
+  title: string;
+  phase: string | null;
+  status: string | null;
+  condition: string | null;
+  enrollment: number | null;
+}
+
+export interface CompanyRnpvAsset {
+  name: string;
+  phase: string | null;
+  probApproval: number;
+  peakSales: number | null;
+  rnpv: number | null;
+  netRnpv: number | null;
+}
+
+export interface FundingRound {
+  id: string;
+  date: string | null;
+  roundType: string | null;
+  amountUsd: number | null;
+  postMoneyUsd: number | null;
+  leadInvestor: string | null;
+  source: string | null;
+  sourceUrl: string | null;
+}
+
+export interface CompanyNote {
+  id: string;
+  createdAt: string;
+  source: string | null;
+  text: string;
+}
+
+export interface CompanyView {
+  company: PrivateCompany;
+  listingStatus: string;
+  pipeline: {
+    programs: CompanyProgram[];
+    sponsorMatched: boolean;
+    trialsFound: number;
+    source: string;
+  };
+  valuation: {
+    valuationMethod: 'rNPV';
+    rnpvTotal: number;
+    programs: CompanyRnpvAsset[];
+    assumptions: { defaultPeakSalesUsd: number; discountRate: number | null; note: string };
+    licensingComps: { basis: string; low: number; mid: number; high: number } | null;
+  };
+  fundingComps: {
+    rounds: FundingRound[];
+    impliedByRnpv: {
+      lastPostMoneyUsd: number;
+      asOf: string | null;
+      rnpvTotal: number;
+      rnpvVsPostMoney: number | null;
+      source: string | null;
+      sourceUrl: string | null;
+    } | null;
+  };
+  notes: CompanyNote[];
+  sources: { field: string; source: string; url: string | null }[];
 }
 
 // ── Compliance wall: private notes + restricted list (Phase J) ────────────────

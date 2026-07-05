@@ -20,6 +20,7 @@ import { PeersTab }        from '@/tabs/PeersTab';
 import { CompetitionTab }  from '@/tabs/CompetitionTab';
 import { CrossBorderTab }  from '@/tabs/CrossBorderTab';
 import { NotesTab }        from '@/tabs/NotesTab';
+import { PrivateCompanyTab } from '@/tabs/PrivateCompanyTab';
 import { NewsTab }         from '@/tabs/NewsTab';
 import { WatchlistTab }    from '@/tabs/WatchlistTab';
 
@@ -156,6 +157,12 @@ export const PANEL_DEFS: Record<AppTab, PanelDef> = {
     defaultSize: { w: 480, h: 620 },
     render: ticker => <NotesTab ticker={ticker} />,
   },
+  privateco: {
+    label: 'Private Co',
+    description: 'Model a private / pre-IPO biotech: pipeline rNPV, funding & deal comps, notes.',
+    defaultSize: { w: 640, h: 680 },
+    render: ticker => <PrivateCompanyTab ticker={ticker} />,
+  },
   news: {
     label: 'News',
     description: 'Recent headlines with AI sentiment context.',
@@ -174,7 +181,7 @@ export const PANEL_ORDER: AppTab[] = [
   'overview', 'fundamentals', 'pipeline', 'catalysts', 'competition', 'news',
   'confidence', 'rnpv', 'dcf', 'scenarios', 'earnings', 'risk', 'backtest',
   'filings', 'ccas', 'duallisting', 'crossborder', 'ownership', 'peers', 'screener',
-  'notes', 'watchlist',
+  'notes', 'privateco', 'watchlist',
 ];
 
 export const DEFAULT_OPEN_PANELS: AppTab[] = ['overview', 'fundamentals', 'pipeline', 'news'];
