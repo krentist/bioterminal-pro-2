@@ -70,6 +70,7 @@ def test_signals_suppressed_for_restricted_ticker():
         f"/api/rnpv/{TICKER}",
         f"/api/scenarios/{TICKER}",
         f"/api/backtest/{TICKER}",
+        f"/api/risk/{TICKER}",
     ):
         resp = client.get(path)
         assert resp.status_code == 200, path
@@ -95,6 +96,7 @@ def test_note_text_never_appears_in_signal_responses():
         f"/api/rnpv/{TICKER}",
         f"/api/scenarios/{TICKER}",
         f"/api/backtest/{TICKER}",
+        f"/api/risk/{TICKER}",
     ):
         assert SECRET not in client.get(path).text, path
     # Provenance-safe notes listing must not carry the free text either.

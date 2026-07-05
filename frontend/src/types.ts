@@ -247,6 +247,8 @@ export interface RiskData {
   ticker: string;
   summary: RiskSummary;
   factors: RiskFactor[];
+  restricted?: boolean;
+  restrictedReason?: string;
 }
 
 // ── Backtest ──────────────────────────────────────────────────────────────────

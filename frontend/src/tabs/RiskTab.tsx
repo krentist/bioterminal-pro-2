@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchRisk } from '@/api';
 import { SkeletonList } from '@/components/Skeleton';
+import { RestrictedPanel } from '@/components/PanelState';
 import { AlertTriangle, AlertCircle, Info, ShieldAlert } from 'lucide-react';
 import type { RiskData, RiskFactor } from '@/types';
 
@@ -70,6 +71,7 @@ export function RiskTab({ ticker }: { ticker: string }) {
   if (loading) return <SkeletonList count={5} className="h-14" />;
   if (error)   return <p className="text-sm text-dim">{error}</p>;
   if (!data)   return null;
+  if (data.restricted) return <RestrictedPanel reason={data.restrictedReason} />;
 
   const { summary, factors } = data;
 

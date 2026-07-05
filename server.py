@@ -273,6 +273,8 @@ def _restricted_response(ticker: str, kind: str) -> Optional[dict]:
         return {**base, "currentPrice": None, "currencySymbol": sym, "scenarios": [], "monteCarlo": None}
     if kind == "backtest":
         return {**base, "metrics": None, "equityCurve": [], "trades": [], "ticker": ticker.upper()}
+    if kind == "risk":
+        return {**base, "ticker": ticker.upper(), "summary": None, "factors": []}
     return base
 
 
@@ -1669,6 +1671,9 @@ _RISK_CACHE_TTL = 1800
 
 @app.get("/api/risk/{ticker}")
 def get_risk(ticker: str):
+    restricted = _restricted_response(ticker, "risk")
+    if restricted is not None:
+        return restricted
     key = ticker.upper()
     now = time.monotonic()
     cached, ts = _RISK_CACHE.get(key, (None, 0.0))
