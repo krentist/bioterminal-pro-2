@@ -366,9 +366,19 @@ def fetch_yfinance_news(ticker: str, limit: int = 50) -> pd.DataFrame:
     This function handles both layouts.
     """
     ticker = normalize_ticker(ticker)
+    news = []
     try:
         t = yf.Ticker(ticker)
-        news = t.news or []
+        # Prefer get_news(tab="all"): it includes press releases, where biotech news lives,
+        # and surfaces items the bare .news property misses entirely for some tickers
+        # (e.g. HK biotechs like 6628.HK, where .news returns [] but tab="all" returns the
+        # company's real releases). Fall back to .news for older yfinance / empty results.
+        try:
+            news = t.get_news(count=limit, tab="all") or []
+        except (AttributeError, TypeError):
+            news = []
+        if not news:
+            news = t.news or []
     except Exception as exc:
         logger.error("fetch_yfinance_news(%s): %s", ticker, exc)
         news = []
