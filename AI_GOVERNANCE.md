@@ -79,6 +79,43 @@ rationale alongside the numeric score, so users are not presented with a black-b
 
 ---
 
+## MNPI compliance wall (private research notes)
+
+BioTerminal lets a user capture private research notes (e.g. context from management or
+investor meetings) alongside public data. This capability is governed by a hard wall
+(`compliance.py`, Phase J) designed to keep the user on the right side of securities law by
+construction, not by discretion.
+
+**The rule enforced.** Material non-public information (MNPI) about a *public* company — or a
+tradable peer — may not be used to generate a trade-oriented signal. Trading on MNPI is
+insider trading (and, under *SEC v. Panuwat*, 2021, so is "shadow trading" a related public
+name).
+
+**How it is enforced:**
+
+- **Provenance-first capture.** Every note (`POST /api/notes`) records its source, subject,
+  and a user classification: is the subject (or a tradable peer) publicly listed, and is the
+  information material and non-public?
+- **Automatic triage → restriction.** If a note is flagged public-subject *and*
+  material-non-public, the ticker is added to a **restricted list** and an immutable
+  **audit-log** entry is written (`GET /api/restricted`, `GET /api/compliance/audit`).
+- **Signal suppression.** Every trade-oriented route (`/api/confidence`, `/api/dcf`,
+  `/api/rnpv`, `/api/scenarios`, `/api/backtest`, and screener inclusion in `/api/screen`)
+  returns a suppressed, clearly-labelled `restricted` payload for a restricted ticker and
+  computes no signal for it.
+- **Text never enters a signal or an LLM.** Note free-text is never fed into any computed
+  signal and is never transmitted to any external service (including the Anthropic API).
+  Listings are provenance-only and omit the text; retrieving a note's text is a separate,
+  explicit call available only to its author.
+- **Private companies are exempt.** A private company has no tradable security to abuse, so
+  material information about it legitimately informs that company's own valuation.
+- **Storage is local.** Notes, the restricted list, and the audit log live in a local SQLite
+  database (`compliance.db`) that is git-ignored and never deployed with the app.
+
+Acceptance is enforced by `tests/test_compliance.py`.
+
+---
+
 ## Rate limiting and abuse prevention
 
 - All `/api/*` routes are rate-limited to 60 requests per minute per IP via `slowapi`.

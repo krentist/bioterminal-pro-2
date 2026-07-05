@@ -52,6 +52,7 @@ from model import predict as ml_predict
 from pipeline_analyzer import enrich_trials, upcoming_catalysts
 from rnpv_calculator import pipeline_rnpv, DEFAULT_PEAK_SALES_USD
 from utils import period_to_dates
+import compliance as _compliance
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -228,6 +229,48 @@ def _to_json_safe(obj):
     if isinstance(obj, np.floating):
         return None if (math.isnan(obj) or math.isinf(obj)) else float(obj)
     return obj
+
+
+# ---------------------------------------------------------------------------
+# MNPI compliance wall (Phase J / §0)
+# If the user has logged potential material non-public information on a ticker,
+# every trade-oriented route suppresses its computed signal for that name.
+# ---------------------------------------------------------------------------
+
+def _restricted_response(ticker: str, kind: str) -> Optional[dict]:
+    """Return a shape-preserving, signal-suppressed payload if `ticker` is restricted,
+    else None. Never computes or leaks a signal for a restricted name."""
+    if not _compliance.is_restricted(ticker):
+        return None
+    reason = _compliance.restricted_reason(ticker) or "Restricted: potential MNPI on this name."
+    sym = _currency_symbol("HKD" if ticker.upper().endswith(".HK") else "USD")
+    base = {"restricted": True, "restrictedReason": reason, "ai_generated": False}
+    if kind == "confidence":
+        return {**base, "score": None, "signal": "RESTRICTED", "factors": [], "newsImpact": None}
+    if kind == "dcf":
+        return {**base, "impliedSharePrice": None, "upside": None, "currencySymbol": sym, "dcf": None}
+    if kind == "rnpv":
+        return {**base, "impliedSharePrice": None, "upside": None, "currencySymbol": sym,
+                "valuationMethod": "rNPV", "rnpvTotal": None, "rnpvPerShare": None,
+                "pipelineDiscount": None, "rnpvDetail": []}
+    if kind == "scenarios":
+        return {**base, "currentPrice": None, "currencySymbol": sym, "scenarios": [], "monteCarlo": None}
+    if kind == "backtest":
+        return {**base, "metrics": None, "equityCurve": [], "trades": [], "ticker": ticker.upper()}
+    return base
+
+
+def _filter_restricted_screen(payload: dict) -> dict:
+    """Drop restricted tickers from a screener payload so a name the user holds potential
+    MNPI on is never surfaced as a screen idea."""
+    restricted = _compliance.restricted_tickers()
+    if not restricted:
+        return payload
+    results = [
+        r for r in payload.get("results", [])
+        if _compliance.normalize_ticker(r.get("ticker")) not in restricted
+    ]
+    return {**payload, "results": results}
 
 
 # ============================================================
@@ -689,6 +732,9 @@ def _default_confidence() -> dict:
 
 @app.get("/api/confidence/{ticker}")
 def get_confidence(ticker: str):
+    restricted = _restricted_response(ticker, "confidence")
+    if restricted is not None:
+        return restricted
     now = time.monotonic()
     cached, ts = _CONFIDENCE_CACHE.get(ticker.upper(), (None, 0.0))
     if cached is not None and now - ts < _CONFIDENCE_CACHE_TTL:
@@ -933,12 +979,18 @@ def _default_assumptions(ticker: str) -> dict:
 
 @app.get("/api/dcf/{ticker}")
 def get_dcf(ticker: str):
+    restricted = _restricted_response(ticker, "dcf")
+    if restricted is not None:
+        return restricted
     assumptions = _default_assumptions(ticker)
     return _to_json_safe(_run_dcf(ticker, assumptions))
 
 
 @app.post("/api/dcf/{ticker}")
 def update_dcf(ticker: str, body: dict):
+    restricted = _restricted_response(ticker, "dcf")
+    if restricted is not None:
+        return restricted
     assumptions = {**_default_assumptions(ticker), **body}
     return _to_json_safe(_run_dcf(ticker, assumptions))
 
@@ -949,6 +1001,9 @@ def update_dcf(ticker: str, body: dict):
 
 @app.get("/api/rnpv/{ticker}")
 def get_rnpv(ticker: str):
+    restricted = _restricted_response(ticker, "rnpv")
+    if restricted is not None:
+        return restricted
     try:
         info = df_mod._cached_yf_info(ticker)
         return _rnpv_valuation(ticker, info)
@@ -963,6 +1018,9 @@ def get_rnpv(ticker: str):
 
 @app.get("/api/scenarios/{ticker}")
 def get_scenarios(ticker: str):
+    restricted = _restricted_response(ticker, "scenarios")
+    if restricted is not None:
+        return restricted
     try:
         info     = df_mod._cached_yf_info(ticker)
         currency = info.get("currency", "USD")
@@ -1417,6 +1475,9 @@ _BACKTEST_CACHE_TTL = 3600  # hourly — price-derived, stable intraday
 
 @app.get("/api/backtest/{ticker}")
 def get_backtest(ticker: str, period: str = "2y"):
+    restricted = _restricted_response(ticker, "backtest")
+    if restricted is not None:
+        return restricted
     key = f"{ticker.upper()}:{period}"
     now = time.monotonic()
     cached, ts = _BACKTEST_CACHE.get(key, (None, 0.0))
@@ -1476,7 +1537,7 @@ def get_screen(region: str = "HK"):
     now = time.monotonic()
     cached, ts = _SCREEN_CACHE.get(region, (None, 0.0))
     if cached is not None and now - ts < _SCREEN_CACHE_TTL:
-        return cached
+        return _filter_restricted_screen(cached)
     try:
         df = _screener.run_screen(region=region, top_n=15)
         if df.empty:
@@ -1502,7 +1563,7 @@ def get_screen(region: str = "HK"):
             "cachedAt": _utc_iso_z(),
         }
         _SCREEN_CACHE[region] = (payload, time.monotonic())
-        return payload
+        return _filter_restricted_screen(payload)
     except Exception as exc:
         logger.error("screen(%s): %s", region, exc)
         raise HTTPException(status_code=502, detail=str(exc))
@@ -1597,6 +1658,54 @@ def get_earnings(ticker: str):
     except Exception as exc:
         logger.error("earnings(%s): %s", ticker, exc)
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ============================================================
+# Compliance wall (Phase J / §0)
+#   /api/notes            — capture private research notes (with provenance + MNPI triage)
+#   /api/restricted       — tickers restricted because the user logged potential MNPI
+#   /api/restricted/{t}/lift — clear a restriction (audit-logged)
+#   /api/compliance/audit — immutable audit trail
+# Note free-text is never fed into any signal route and never leaves this host.
+# ============================================================
+
+@app.get("/api/notes")
+def get_notes(subject: Optional[str] = None):
+    return {"notes": _compliance.list_notes(subject)}
+
+
+@app.post("/api/notes")
+def create_note(body: dict):
+    subject = (body.get("subject") or "").strip()
+    text    = (body.get("text") or body.get("freeText") or "").strip()
+    if not subject or not text:
+        raise HTTPException(status_code=400, detail="subject and text are required")
+    note = _compliance.add_note(
+        subject,
+        text,
+        source=(body.get("source") or "").strip(),
+        subject_ticker=body.get("subjectTicker") or body.get("ticker"),
+        is_public_subject=bool(body.get("isPublicSubject")),
+        is_material_nonpublic=bool(body.get("isMaterialNonpublic")),
+    )
+    return note
+
+
+@app.get("/api/restricted")
+def get_restricted():
+    return {"restricted": _compliance.list_restricted()}
+
+
+@app.post("/api/restricted/{ticker}/lift")
+def lift_restricted(ticker: str, note: str = ""):
+    if not _compliance.lift_restriction(ticker, note):
+        raise HTTPException(status_code=404, detail="ticker is not restricted")
+    return {"ticker": _compliance.normalize_ticker(ticker), "restricted": False, "lifted": True}
+
+
+@app.get("/api/compliance/audit")
+def get_compliance_audit():
+    return {"audit": _compliance.list_audit()}
 
 
 # ============================================================
