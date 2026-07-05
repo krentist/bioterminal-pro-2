@@ -275,7 +275,9 @@ function RiskPanel({ ticker, onFull }: { ticker: string; onFull: () => void }) {
             <Skeleton className="h-10" />
             <Skeleton className="h-10" />
           </div>
-        ) : data ? (
+        ) : data?.restricted ? (
+          <p className="text-[11px] text-dim">Restricted — signals suppressed for this name.</p>
+        ) : data && data.summary ? (
           <>
             <div className="flex items-center gap-2 mb-2.5">
               <span className={`text-[9px] font-semibold tracking-widest px-2 py-0.5 rounded border ${RISK_BADGE[data.summary.overall] ?? 'text-dim bg-elevated border-line'}`}>
