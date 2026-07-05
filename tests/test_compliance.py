@@ -60,6 +60,21 @@ def test_audit_entry_written_on_restrict():
     assert any(a["action"] == "restrict" and a["ticker"] == TICKER for a in audit)
 
 
+def test_company_name_subject_does_not_create_phantom_restriction():
+    # A company *name* (not a ticker) marked public+MNPI must not create a dead restriction
+    # that no signal route can ever match — that would be false assurance.
+    r = client.post("/api/notes", json={
+        "subject": "Acme Therapeutics",
+        "subjectTicker": "Acme Therapeutics",
+        "text": "founder hinted at a miss",
+        "isPublicSubject": True,
+        "isMaterialNonpublic": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["restrictedTriggered"] is False
+    assert client.get("/api/restricted").json()["restricted"] == []
+
+
 # --- signal suppression -----------------------------------------------------
 
 def test_signals_suppressed_for_restricted_ticker():

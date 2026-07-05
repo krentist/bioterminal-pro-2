@@ -16,6 +16,7 @@ Storage is a local SQLite database (single-user). Path is `COMPLIANCE_DB` if set
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -53,6 +54,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 _DEFAULT_REASON = "You logged potential material non-public information on this name."
+
+# A restriction is only meaningful for a real, ticker-shaped symbol. A company *name*
+# typed as the subject (e.g. "Acme Therapeutics") must not create a phantom restriction that
+# no signal route will ever match — that would give false assurance the wall is protecting you.
+_TICKER_LIKE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
+
+
+def _is_ticker_like(t: Optional[str]) -> bool:
+    return bool(_TICKER_LIKE.match((t or "").strip().upper()))
 
 
 def _now() -> str:
@@ -111,7 +121,7 @@ def add_note(
     note_id = uuid.uuid4().hex
     created = _now()
     ticker = normalize_ticker(subject_ticker)
-    triggered = bool(is_public_subject and is_material_nonpublic and ticker)
+    triggered = bool(is_public_subject and is_material_nonpublic and _is_ticker_like(ticker))
 
     with _LOCK:
         conn = _connect()

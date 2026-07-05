@@ -62,6 +62,8 @@ export function NotesTab({ ticker }: { ticker: string }) {
       setText('');
       if (r.restrictedTriggered) {
         setFlash({ kind: 'restrict', msg: `${r.subjectTicker ?? subject} is now restricted — trade-oriented signals are suppressed for it.` });
+      } else if (isPublic && isMnpi) {
+        setFlash({ kind: 'restrict', msg: `Note saved, but "${subject.trim()}" isn't a valid ticker, so nothing was restricted. Enter the listed ticker (e.g. 6160.HK) to apply the compliance wall.` });
       } else {
         setFlash({ kind: 'ok', msg: 'Note saved. It stays local and is never used in any public signal.' });
       }
